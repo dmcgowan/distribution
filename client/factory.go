@@ -1,7 +1,6 @@
 package client
 
 import (
-	"errors"
 	"net/http"
 	"os"
 	"strings"
@@ -46,7 +45,7 @@ func (f *RepositoryClientConfig) Resolver() (namespace.Resolver, error) {
 }
 
 // type RepositoryClientFactory func(version string, registries, mirrors []string) (distribution.Repository, error)
-func (f *RepositoryClientConfig) newRepository(namespace string, registries, mirrors []string) (distribution.Repository, error) {
+func (f *RepositoryClientConfig) newRepository(ctx context.Context, namespace string, endpoints []distribution.RemoteEndpoint) (distribution.Repository, error) {
 	if f.TrimHostname {
 		i := strings.IndexRune(namespace, '/')
 		if i > -1 && i < len(namespace)-1 {
@@ -61,17 +60,20 @@ func (f *RepositoryClientConfig) newRepository(namespace string, registries, mir
 		Header: f.Header,
 	}
 
-	if f.AllowMirrors && len(mirrors) > 0 {
-		endpoint.Endpoint = mirrors[0]
-		endpoint.Mirror = true
-	}
-	if endpoint.Endpoint == "" && len(registries) > 0 {
-		endpoint.Endpoint = registries[0]
-	}
+	// TODO Loop through and find endpoint
+	endpoint.Endpoint = endpoints[0].BaseURL().String()
 
-	if endpoint.Endpoint == "" {
-		return nil, errors.New("No valid endpoints")
-	}
+	//if f.AllowMirrors && len(mirrors) > 0 {
+	//	endpoint.Endpoint = mirrors[0]
+	//	endpoint.Mirror = true
+	//}
+	//if endpoint.Endpoint == "" && len(registries) > 0 {
+	//	endpoint.Endpoint = registries[0]
+	//}
+
+	//if endpoint.Endpoint == "" {
+	//	return nil, errors.New("No valid endpoints")
+	//}
 
 	return rclient.NewRepositoryClient(context.Background(), namespace, endpoint)
 }

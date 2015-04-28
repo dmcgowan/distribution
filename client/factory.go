@@ -21,7 +21,7 @@ type RepositoryClientConfig struct {
 	NamespaceFile string
 	// Discovery method
 
-	// Store auth configurations
+	Credentials rclient.CredentialStore
 }
 
 // Resolver returns a new namespace resolver using this repository
@@ -57,7 +57,8 @@ func (f *RepositoryClientConfig) newRepository(ctx context.Context, namespace st
 
 	// Currently only single endpoint repository used
 	endpoint := &rclient.RepositoryEndpoint{
-		Header: f.Header,
+		Header:      f.Header,
+		Credentials: f.Credentials,
 	}
 
 	// TODO Loop through and find endpoint

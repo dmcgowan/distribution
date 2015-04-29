@@ -173,21 +173,18 @@ func (luh *layerUploadHandler) PutLayerUploadComplete(w http.ResponseWriter, r *
 		return
 	}
 
+	var dgsts []digest.Digest
+
 	dgstStr := r.FormValue("digest") // TODO(stevvooe): Support multiple digest parameters!
-
-	if dgstStr == "" {
-		// no digest? return error, but allow retry.
-		w.WriteHeader(http.StatusBadRequest)
-		luh.Errors.Push(v2.ErrorCodeDigestInvalid, "digest missing")
-		return
-	}
-
-	dgst, err := digest.ParseDigest(dgstStr)
-	if err != nil {
-		// no digest? return error, but allow retry.
-		w.WriteHeader(http.StatusNotFound)
-		luh.Errors.Push(v2.ErrorCodeDigestInvalid, "digest parsing failed")
-		return
+	if dgstStr != "" {
+		dgst, err := digest.ParseDigest(dgstStr)
+		if err != nil {
+			// no digest? return error, but allow retry.
+			w.WriteHeader(http.StatusNotFound)
+			luh.Errors.Push(v2.ErrorCodeDigestInvalid, "digest parsing failed")
+			return
+		}
+		dgsts = append(dgsts, dgst)
 	}
 
 	// TODO(stevvooe): Check the incoming range header here, per the
@@ -205,7 +202,13 @@ func (luh *layerUploadHandler) PutLayerUploadComplete(w http.ResponseWriter, r *
 		return
 	}
 
-	layer, err := luh.Upload.Finish(dgst)
+	if len(dgsts) == 0 {
+		luh.layerUploadResponse(w, r)
+		w.WriteHeader(http.StatusAccepted)
+		return
+	}
+
+	layer, err := luh.Upload.Finish(dgsts[0])
 	if err != nil {
 		switch err := err.(type) {
 		case distribution.ErrLayerInvalidDigest:
@@ -294,7 +297,7 @@ func (luh *layerUploadHandler) layerUploadResponse(w http.ResponseWriter, r *htt
 	w.Header().Set("Docker-Upload-UUID", luh.UUID)
 	w.Header().Set("Location", uploadURL)
 	w.Header().Set("Content-Length", "0")
-	w.Header().Set("Range", fmt.Sprintf("0-%d", luh.State.Offset))
+	w.Header().Set("Range", fmt.Sprintf("0-%d", luh.State.Offset-1))
 
 	return nil
 }

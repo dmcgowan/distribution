@@ -209,6 +209,13 @@ func TestLayerAPI(t *testing.T) {
 	uploadURLBase, uploadUUID = startPushLayer(t, env.builder, imageName)
 	pushLayer(t, env.builder, imageName, layerDigest, uploadURLBase, layerFile)
 
+	// ------------------------------------------
+	// Now, push just a chunk
+	layerFile.Seek(0, 0)
+	b, _ := ioutil.ReadAll(layerFile)
+
+	uploadURLBase, uploadUUID = startPushLayer(t, env.builder, imageName)
+	pushChunk(t, env.builder, imageName, uploadURLBase, 0, b)
 	// ------------------------
 	// Use a head request to see if the layer exists.
 	resp, err = http.Head(layerURL)
@@ -601,6 +608,52 @@ func pushLayer(t *testing.T, ub *v2.URLBuilder, name string, dgst digest.Digest,
 		"Location":              []string{expectedLayerURL},
 		"Content-Length":        []string{"0"},
 		"Docker-Content-Digest": []string{sha256Dgst.String()},
+	})
+
+	return resp.Header.Get("Location")
+}
+
+func doPushChunk(t *testing.T, uploadURLBase string, start int64, body []byte) (*http.Response, error) {
+	u, err := url.Parse(uploadURLBase)
+	if err != nil {
+		t.Fatalf("unexpected error parsing pushLayer url: %v", err)
+	}
+
+	u.RawQuery = url.Values{
+		"_state": u.Query()["_state"],
+	}.Encode()
+
+	uploadURL := u.String()
+
+	// Just do a monolithic upload
+	req, err := http.NewRequest("PATCH", uploadURL, bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("unexpected error creating new request: %v", err)
+	}
+	req.Header.Set("Content-Length", fmt.Sprintf("%d", len(body)))
+	req.Header.Set("Content-Range", fmt.Sprintf("%d-%d", start, start+int64(len(body))-1))
+	req.Header.Set("Content-Type", "application/octet-stream")
+
+	return http.DefaultClient.Do(req)
+}
+
+func pushChunk(t *testing.T, ub *v2.URLBuilder, name string, uploadURLBase string, start int64, body []byte) string {
+	resp, err := doPushChunk(t, uploadURLBase, start, body)
+	if err != nil {
+		t.Fatalf("unexpected error doing push layer request: %v", err)
+	}
+	defer resp.Body.Close()
+
+	checkResponse(t, "putting chunk", resp, http.StatusAccepted)
+
+	if err != nil {
+		t.Fatalf("error generating sha256 digest of body")
+	}
+
+	checkHeaders(t, resp, http.Header{
+		//"Location":              []string{expectedLayerURL},
+		"Range":          []string{fmt.Sprintf("0-%d", start+int64(len(body))-1)},
+		"Content-Length": []string{"0"},
 	})
 
 	return resp.Header.Get("Location")

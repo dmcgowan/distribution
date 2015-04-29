@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 
 	"github.com/docker/distribution"
 	ctxu "github.com/docker/distribution/context"
@@ -23,11 +24,10 @@ func layerUploadDispatcher(ctx *Context, r *http.Request) http.Handler {
 	}
 
 	handler := http.Handler(handlers.MethodHandler{
-		"POST": http.HandlerFunc(luh.StartLayerUpload),
-		"GET":  http.HandlerFunc(luh.GetUploadStatus),
-		"HEAD": http.HandlerFunc(luh.GetUploadStatus),
-		// TODO(stevvooe): Must implement patch support.
-		// "PATCH":    http.HandlerFunc(luh.PutLayerChunk),
+		"POST":   http.HandlerFunc(luh.StartLayerUpload),
+		"GET":    http.HandlerFunc(luh.GetUploadStatus),
+		"HEAD":   http.HandlerFunc(luh.GetUploadStatus),
+		"PATCH":  http.HandlerFunc(luh.PutLayerChunk),
 		"PUT":    http.HandlerFunc(luh.PutLayerUploadComplete),
 		"DELETE": http.HandlerFunc(luh.CancelLayerUpload),
 	})
@@ -159,6 +159,84 @@ func (luh *layerUploadHandler) GetUploadStatus(w http.ResponseWriter, r *http.Re
 
 	w.Header().Set("Docker-Upload-UUID", luh.UUID)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// PutLayerChunk takes in a section of the layer anad writes
+// that section.
+func (luh *layerUploadHandler) PutLayerChunk(w http.ResponseWriter, r *http.Request) {
+	if luh.Upload == nil {
+		w.WriteHeader(http.StatusNotFound)
+		luh.Errors.Push(v2.ErrorCodeBlobUploadUnknown)
+		return
+	}
+
+	ct := r.Header.Get("Content-Type")
+	if ct != "" && ct != "application/octet-stream" {
+		w.WriteHeader(http.StatusBadRequest)
+		// TODO(dmcgowan): encode error
+		return
+	}
+
+	cl := r.Header.Get("Content-Length")
+	l, err := strconv.ParseInt(cl, 10, 64)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		// TODO(dmcgowan): encode err
+		return
+	}
+
+	cr := r.Header.Get("Content-Range")
+	var start, end int64
+	if n, err := fmt.Sscanf(cr, "%d-%d", &start, &end); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		// TODO(dmcgowan): last valid range
+		return
+	} else if n != 2 {
+		w.WriteHeader(http.StatusBadRequest)
+		// TODO(dmcgowan): last valid range
+		return
+	}
+
+	// Check range matches content l
+	if (l > 0 && end > start && (end-start+1 != l)) || (l == 0 && end <= start) {
+		w.WriteHeader(416)
+		// TODO(dmcgowan): last valid range
+		return
+	}
+
+	// Set end based on l
+	if end <= start {
+		end = start + l - 1
+	} else if l == 0 {
+		l = end - start + 1
+	}
+
+	if _, err := luh.Upload.Seek(start, 0); err != nil {
+		ctxu.GetLogger(luh).Errorf("unknown error seeking for upload: %v", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		luh.Errors.Push(v2.ErrorCodeUnknown, err)
+		return
+	}
+
+	if n, err := io.Copy(luh.Upload, io.LimitReader(r.Body, l)); err != nil {
+		ctxu.GetLogger(luh).Errorf("unknown error writing for upload: %v", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		luh.Errors.Push(v2.ErrorCodeUnknown, err)
+		return
+	} else if n != l {
+		ctxu.GetLogger(luh).Errorf("short write on upload: %d out of %d", n, l)
+		w.WriteHeader(http.StatusInternalServerError)
+		luh.Errors.Push(v2.ErrorCodeUnknown, "short write to backend")
+		return
+	}
+
+	if err := luh.layerUploadResponse(w, r); err != nil {
+		w.WriteHeader(http.StatusInternalServerError) // Error conditions here?
+		luh.Errors.Push(v2.ErrorCodeUnknown, err)
+		return
+	}
+
+	w.WriteHeader(http.StatusAccepted)
 }
 
 // PutLayerUploadComplete takes the final request of a layer upload. The final

@@ -45,7 +45,7 @@ func (f *RepositoryClientConfig) Resolver() (namespace.Resolver, error) {
 }
 
 // type RepositoryClientFactory func(version string, registries, mirrors []string) (distribution.Repository, error)
-func (f *RepositoryClientConfig) newRepository(ctx context.Context, namespace string, endpoints []distribution.RemoteEndpoint) (distribution.Repository, error) {
+func (f *RepositoryClientConfig) newRepository(ctx context.Context, namespace string, endpoints []*namespace.RemoteEndpoint) (distribution.Repository, error) {
 	if f.TrimHostname {
 		i := strings.IndexRune(namespace, '/')
 		if i > -1 && i < len(namespace)-1 {
@@ -62,7 +62,7 @@ func (f *RepositoryClientConfig) newRepository(ctx context.Context, namespace st
 	}
 
 	// TODO Loop through and find endpoint
-	endpoint.Endpoint = endpoints[0].BaseURL().String()
+	endpoint.Endpoint = endpoints[0].BaseURL.String()
 
 	//if f.AllowMirrors && len(mirrors) > 0 {
 	//	endpoint.Endpoint = mirrors[0]

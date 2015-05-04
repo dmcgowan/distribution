@@ -8,6 +8,7 @@ import (
 
 	"github.com/codegangsta/cli"
 	"github.com/docker/distribution/client"
+	"github.com/docker/distribution/namespace"
 )
 
 var (
@@ -45,28 +46,25 @@ func splitTag(ns string) (string, string) {
 }
 
 func imagePull(c *cli.Context) {
+	resolver, err := namespace.NewDefaultFileResolver(".namespace.cfg")
+	if err != nil {
+		log.Fatal(err)
+	}
+
 	config := client.RepositoryClientConfig{
-		TrimHostname:  true,
-		AllowMirrors:  true,
-		NamespaceFile: ".namespace.cfg",
+		TrimHostname: true,
+		AllowMirrors: true,
 		Header: map[string][]string{
 			"User-Agent": {"docker/1.6.0 distribution-cli"},
 		},
-	}
-
-	resolver, err := config.Resolver()
-	if err != nil {
-		log.Fatal(err)
+		Endpoints: client.NamespaceEndpointProvider(resolver),
 	}
 
 	for _, ns := range c.Args() {
 		name, tag := splitTag(ns)
 		log.Printf("Pulling %s %s", name, tag)
-		nspace, err := resolver.Resolve(name)
-		if err != nil {
-			log.Fatal(err)
-		}
-		repo, err := nspace.Repository(context.Background(), name)
+
+		repo, err := config.Repository(context.Background(), name)
 		if err != nil {
 			log.Fatal(err)
 		}

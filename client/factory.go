@@ -1,8 +1,10 @@
 package client
 
 import (
+	"errors"
 	"net/http"
-	"os"
+	"net/url"
+	"path"
 	"strings"
 
 	"golang.org/x/net/context"
@@ -17,40 +19,96 @@ type RepositoryClientConfig struct {
 	TrimHostname bool
 	AllowMirrors bool
 	Header       http.Header
-
-	NamespaceFile string
-	// Discovery method
+	RepoScope    string
 
 	Credentials rclient.CredentialStore
+	Endpoints   EndpointProvider
 }
 
-// Resolver returns a new namespace resolver using this repository
-// client configuration.  If there is an error loading the configuration,
-// an error will be returned with a nil resolver.
-func (f *RepositoryClientConfig) Resolver() (namespace.Resolver, error) {
-	// Read base entries from f.NamespaceFile
-	nsf, err := os.Open(f.NamespaceFile)
+type scope string
+
+// Contains returns true if the name matches the scope.
+func (s scope) Contains(name string) bool {
+	// Check for an exact match, with a cleaned path component
+	if path.Clean(string(s)) == path.Clean(name) {
+		return true
+	}
+
+	// A simple prefix match is enough.
+	if strings.HasPrefix(name, string(s)) {
+		return true
+	}
+
+	return false
+}
+
+func (s scope) String() string {
+	return string(s)
+}
+
+// EndpointProvider provides URLs for a given name with the option
+// to accept mirrors.
+type EndpointProvider func(name string, allowMirrors bool) ([]*url.URL, error)
+
+// StaticEndpointProvider returns an EndpointProvider which always
+// returns the same URL.
+func StaticEndpointProvider(u *url.URL) EndpointProvider {
+	return func(string, bool) ([]*url.URL, error) {
+		return []*url.URL{u}, nil
+	}
+}
+
+// NamespaceEndpointProvider returns an EndpointProvider which
+// resolves the name and returns URLs based on that resolution.
+func NamespaceEndpointProvider(resolver namespace.Resolver) EndpointProvider {
+	return func(name string, allowMirrors bool) ([]*url.URL, error) {
+		resolved, err := resolver.Resolve(name)
+		if err != nil {
+			return nil, err
+		}
+		endpoints, err := namespace.GetRemoteEndpoints(resolved)
+		if err != nil {
+			return nil, err
+		}
+		if len(endpoints) == 0 {
+			return nil, errors.New("no endpoints found")
+		}
+		// TODO(dmcgowan): return prioritized list of endpoints
+		// TODO(dmcgowan): only return endpoints with proper action
+
+		return []*url.URL{endpoints[0].BaseURL}, nil
+	}
+}
+
+// Scope returns the scope for which the configuration is valid
+func (f *RepositoryClientConfig) Scope() distribution.Scope {
+	if f.RepoScope == "" {
+		return distribution.GlobalScope
+	}
+	return scope(f.RepoScope)
+}
+
+// Repository creates a new repository from the configuration
+func (f *RepositoryClientConfig) Repository(ctx context.Context, name string) (distribution.Repository, error) {
+	if !f.Scope().Contains(name) {
+		return nil, errors.New("name out of scope for configuration")
+	}
+	if f.Endpoints == nil {
+		return nil, errors.New("no endpoint provider")
+	}
+	endpoints, err := f.Endpoints(name, f.AllowMirrors)
 	if err != nil {
 		return nil, err
 	}
-
-	entries, err := namespace.ReadEntries(nsf)
-	if err != nil {
-		return nil, err
+	if len(endpoints) == 0 {
+		return nil, errors.New("no endpoints")
 	}
 
-	resolver := namespace.NewNamespaceResolver(entries, namespace.NopDiscoverer{}, f.newRepository)
-
-	return resolver, nil
-}
-
-// type RepositoryClientFactory func(version string, registries, mirrors []string) (distribution.Repository, error)
-func (f *RepositoryClientConfig) newRepository(ctx context.Context, namespace string, endpoints []*namespace.RemoteEndpoint) (distribution.Repository, error) {
 	if f.TrimHostname {
-		i := strings.IndexRune(namespace, '/')
-		if i > -1 && i < len(namespace)-1 {
+		i := strings.IndexRune(name, '/')
+		if i > -1 && i < len(name)-1 {
 			// TODO(dmcgowan): Check if first element is actually hostname
-			namespace = namespace[i+1:]
+			name = name[i+1:]
 		}
 
 	}
@@ -59,22 +117,10 @@ func (f *RepositoryClientConfig) newRepository(ctx context.Context, namespace st
 	endpoint := &rclient.RepositoryEndpoint{
 		Header:      f.Header,
 		Credentials: f.Credentials,
+		Endpoint:    endpoints[0].String(),
 	}
 
-	// TODO Loop through and find endpoint
-	endpoint.Endpoint = endpoints[0].BaseURL.String()
+	// TODO(dmcgowan): Support multiple endpoints
 
-	//if f.AllowMirrors && len(mirrors) > 0 {
-	//	endpoint.Endpoint = mirrors[0]
-	//	endpoint.Mirror = true
-	//}
-	//if endpoint.Endpoint == "" && len(registries) > 0 {
-	//	endpoint.Endpoint = registries[0]
-	//}
-
-	//if endpoint.Endpoint == "" {
-	//	return nil, errors.New("No valid endpoints")
-	//}
-
-	return rclient.NewRepositoryClient(context.Background(), namespace, endpoint)
+	return rclient.NewRepositoryClient(context.Background(), name, endpoint)
 }

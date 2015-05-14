@@ -3,13 +3,17 @@ package namespace
 import (
 	"crypto/tls"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"testing"
+	"time"
 
 	"github.com/Sirupsen/logrus"
 	"github.com/gorilla/mux"
@@ -17,7 +21,6 @@ import (
 
 type testScopeAttr struct {
 	Name htmlMetaTagEnum
-	URL  string
 	Args []string
 }
 
@@ -52,51 +55,58 @@ var (
 
 	testScopes = map[string][]testScopeAttr{
 		"example.com": {
-			{htmlMetaTagScope, "example.com", []string{}},
-			{htmlMetaTagIndex, "https://search.example.com/", []string{}},
-			{htmlMetaTagRegistry, "https://registry.example.com/v1/", []string{"version=1.0", "trim"}},
+			{htmlMetaTagScope, []string{"example.com"}},
+			{htmlMetaTagIndex, []string{"https://search.example.com/"}},
+			{htmlMetaTagRegistry, []string{"https://registry.example.com/v1/", "version=1.0", "trim"}},
 		},
 		"example.com/foo": {
-			{htmlMetaTagScope, "example.com/foo", []string{}},
-			{htmlMetaTagIndex, "https://search.foo.com/", []string{}},
-			{htmlMetaTagRegistryPull, "https://mirror.foo.com/v1/", []string{"version=1.0"}},
-			{htmlMetaTagRegistryPush, "https://registry.foo.com/v1/", []string{"version=1.0"}},
-			{htmlMetaTagNamespace, "example.com", []string{}},
+			{htmlMetaTagScope, []string{"example.com/foo"}},
+			{htmlMetaTagIndex, []string{"https://search.foo.com/"}},
+			{htmlMetaTagRegistryPull, []string{"https://mirror.foo.com/v1/", "version=1.0"}},
+			{htmlMetaTagRegistryPush, []string{"https://registry.foo.com/v1/", "version=1.0"}},
+			{htmlMetaTagNamespace, []string{"example.com"}},
 		},
 		"example.com/project": {
-			{htmlMetaTagScope, "example.com/project", []string{}},
-			{htmlMetaTagIndex, "https://search.company.ltd/", []string{}},
-			{htmlMetaTagRegistry, "https://registry.company.ltd/v2/", []string{"version=2.0", "trim"}},
+			{htmlMetaTagScope, []string{"example.com/project"}},
+			{htmlMetaTagIndex, []string{"https://search.company.ltd/"}},
+			{htmlMetaTagRegistry, []string{"https://registry.company.ltd/v2/", "version=2.0", "trim"}},
+			{htmlMetaTagNamespace, []string{}},
 		},
 		"example.com/project/main": {
 			// missing scope entry - it should apply just to this namespace
-			{htmlMetaTagIndex, "https://search.project.com/", []string{}},
-			{htmlMetaTagRegistryPull, "https://mirror.project.com/v2/", []string{"version=2.0.1"}},
-			{htmlMetaTagRegistryPush, "https://registry-1.project.com/v2/", []string{"version=2.0.1"}},
+			{htmlMetaTagIndex, []string{"https://search.project.com/"}},
+			{htmlMetaTagRegistryPull, []string{"https://mirror.project.com/v2/", "version=2.0.1"}},
+			{htmlMetaTagRegistryPush, []string{"https://registry-1.project.com/v2/", "version=2.0.1"}},
+			{htmlMetaTagNamespace, []string{"example.com/project"}},
 		},
 		"other.com": {
-			{htmlMetaTagScope, "other.com", []string{}},
-			{htmlMetaTagIndex, "https://other.com/v1/", []string{}},
-			{htmlMetaTagRegistryPull, "https://mirror.other.com/v2/", []string{"version=2.0"}},
-			{htmlMetaTagRegistryPush, "https://registry.other.com/v1/", []string{"version=1.0"}},
+			{htmlMetaTagScope, []string{"other.com"}},
+			{htmlMetaTagIndex, []string{"https://other.com/v1/"}},
+			{htmlMetaTagRegistryPull, []string{"https://mirror.other.com/v2/", "version=2.0"}},
+			{htmlMetaTagRegistryPush, []string{"https://registry.other.com/v1/", "version=1.0"}},
 		},
 		"other.com/big/foo": {
 			// just inherit parent namespace
-			{htmlMetaTagScope, "other.com/big/foo", []string{}},
-			{htmlMetaTagNamespace, "other.com/big", []string{"version=2.0"}},
+			{htmlMetaTagScope, []string{"other.com/big/foo"}},
+			{htmlMetaTagNamespace, []string{"other.com/big"}},
 		},
+		// refer to totally different namespace
 		"other.com/big/foo/app": {
-			{htmlMetaTagScope, "other.com/big/foo/app", []string{}},
-			{htmlMetaTagIndex, "https://index.big.com/v1/", []string{}},
-			{htmlMetaTagRegistry, "https://mirror.other.com/v2/", []string{"version=2.0"}},
+			{htmlMetaTagScope, []string{"other.com/big/foo/app"}},
+			{htmlMetaTagIndex, []string{"https://index.big.com/v1/"}},
+			{htmlMetaTagRegistry, []string{"https://mirror.other.com/v2/", "version=2.0"}},
+			{htmlMetaTagNamespace, []string{"example.com/project", "other.com"}},
 		},
 	}
 
 	// sorted list of scopes (from the longest to shortest")
 	testScopeList []string
 
-	testServerNameToAddr map[string]string
+	// maps <address>:<port> to corresponding server name (e.g. example.com)
 	testServerAddrToName map[string]string
+
+	// contains netries <serverName> : <timeOfLastAccess>
+	testServerLastAccessed map[string]time.Time
 )
 
 func init() {
@@ -110,13 +120,16 @@ func init() {
 
 	exampleServer = httptest.NewTLSServer(handlerAccessLog(r))
 	otherServer = httptest.NewTLSServer(handlerAccessLog(r))
-	testServerNameToAddr = map[string]string{
-		"example.com": strings.TrimPrefix(exampleServer.URL, "https://"),
-		"other.com":   strings.TrimPrefix(otherServer.URL, "https://"),
-	}
-	testServerAddrToName = map[string]string{
-		testServerNameToAddr["example.com"]: "example.com",
-		testServerNameToAddr["other.com"]:   "other.com",
+
+	testServerAddrToName = make(map[string]string, 2)
+	testServerLastAccessed = make(map[string]time.Time, 2)
+	for _, tup := range []struct{ name, url string }{
+		{"example.com", exampleServer.URL},
+		{"other.com", otherServer.URL},
+	} {
+		addr := strings.TrimPrefix(tup.url, "https://")
+		testServerAddrToName[addr] = tup.name
+		testServerLastAccessed[tup.name] = time.Now()
 	}
 
 	testScopeList = make([]string, 0, len(testScopes))
@@ -146,13 +159,23 @@ func newMockHTTPClient() *mockHTTPClient {
 }
 
 func getScopeAttrs(host, path string) []testScopeAttr {
-	_, exists := testRepositories[host]
+	repos, exists := testRepositories[host]
 	if !exists {
 		return nil
 	}
 	name := filepath.Join(host, path)
 	if attrs, exists := testScopes[name]; exists {
 		return attrs
+	}
+	found := false
+	for _, repo := range repos {
+		if repo == path || strings.HasPrefix(repo, path+"/") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return nil
 	}
 	for _, scp := range testScopeList {
 		if strings.HasPrefix(name, scp) {
@@ -190,12 +213,8 @@ func writeAttributes(w http.ResponseWriter, attrs []testScopeAttr) {
 	// TODO: does <head> tag belong here?
 	w.Write([]byte("<head>\n"))
 	for _, attr := range attrs {
-		content := attr.URL
-		if len(attr.Args) > 0 {
-			content += " " + strings.Join(attr.Args, " ")
-		}
-		metaTagLine := fmt.Sprintf("<meta name=\"%s\" content=\"%s\">\n", attr.Name, content)
-		w.Write([]byte(metaTagLine))
+		metaTagLine := fmt.Sprintf("<meta name=\"%s\" content=\"%s\">", attr.Name, strings.Join(attr.Args, " "))
+		w.Write([]byte(metaTagLine + "\n"))
 		logrus.Debugf(metaTagLine)
 	}
 	w.Write([]byte("</head>\n"))
@@ -212,7 +231,8 @@ func apiError(w http.ResponseWriter, code int, message string, args ...interface
 
 func handlerAccessLog(handler http.Handler) http.Handler {
 	logHandler := func(w http.ResponseWriter, r *http.Request) {
-		logrus.Debugf("%s \"%s %s\"", r.RemoteAddr, r.Method, r.URL)
+		logrus.Debugf("[host=%s (%s)]: %s \"%s %s\"", testServerAddrToName[r.Host], r.Host, r.RemoteAddr, r.Method, r.URL)
+		testServerLastAccessed[testServerAddrToName[r.Host]] = time.Now()
 		handler.ServeHTTP(w, r)
 	}
 	return http.HandlerFunc(logHandler)
@@ -231,4 +251,12 @@ func discoveryHandler(w http.ResponseWriter, r *http.Request) {
 		apiError(w, 404, "Path not found")
 	}
 	writeAttributes(w, attrs)
+}
+
+func TestMain(t *testing.M) {
+	flag.Parse()
+	if testing.Verbose() {
+		logrus.SetLevel(logrus.DebugLevel)
+	}
+	os.Exit(t.Run())
 }

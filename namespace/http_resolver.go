@@ -1,7 +1,6 @@
 package namespace
 
 import (
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -9,15 +8,16 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Sirupsen/logrus"
 	"golang.org/x/net/html"
 )
-
-type NSResolveActionEnum int
 
 // Minimal interface of HTTP client used to perform discoveries over https.
 type HTTPClient interface {
 	Get(url string) (*http.Response, error)
 }
+
+type NSResolveActionEnum int
 
 const (
 	/* Add namespace entries to resulting list of entries and
@@ -29,6 +29,8 @@ const (
 	 * Don't perform discovery on them. */
 	NSResolveActionPass
 )
+
+type NSResolveActionCallback func(name string, namespace scope) NSResolveActionEnum
 
 type htmlMetaTagEnum int
 
@@ -67,7 +69,7 @@ func newCacheEntry(entries *Entries) cacheEntry {
 type httpResolver struct {
 	client            HTTPClient
 	resolverFactory   func(*Entries) Resolver
-	nsResolveCallback func(string) NSResolveActionEnum
+	nsResolveCallback NSResolveActionCallback
 	expireAfter       time.Duration
 	cache             map[string]cacheEntry
 }
@@ -153,8 +155,8 @@ func parseHTMLMetaTag(z *html.Tokenizer, name string) (scope, []Entry, error) {
 			}
 		case "content":
 			args = reWhitespace.Split(strings.TrimSpace(string(val)), -1)
-			if len(args) < 1 {
-				return "", nil, fmt.Errorf("meta tag %s without any content")
+			if len(args) == 1 && args[0] == "" {
+				args = []string{}
 			}
 		default:
 			return "", nil, fmt.Errorf("unrecognized meta tag attribute %s", string(attr))
@@ -176,7 +178,7 @@ func parseHTMLMetaTag(z *html.Tokenizer, name string) (scope, []Entry, error) {
 		}
 		return scp, nil, nil
 	}
-	if args == nil {
+	if args == nil && tag != htmlMetaTagNamespace {
 		return "", nil, fmt.Errorf("meta tag %s is missing content", tag.String())
 	}
 	for i := range entries {
@@ -260,11 +262,14 @@ ParsingLoop:
 /* Create base HTTP resolver.
  *
  * resolverFactory returns a resolver which will be called on fetched entries.
- * nsResolveCallback is called for every namespace extension.
- *		If not given, all scope extensions will be processed recursively.
+ * nsResolveCallback is called for every namespace extension with a name being
+ *     resolved. It shall return desired action. If not given, all namespace
+ *     extensions which are ancestors to namespace being resolved will be processed
+ *     recursively. Others will be ignored. Namespace can be empty denoting namespace
+ *     entry without any arguments.
  * expireAfter time interval saying how long to keep entries in cache
  */
-func NewHttpResolver(client HTTPClient, resolverFactory func(*Entries) Resolver, nsResolveCallback func(string) NSResolveActionEnum, expireAfter time.Duration) Resolver {
+func NewHTTPResolver(client HTTPClient, resolverFactory func(*Entries) Resolver, nsResolveCallback NSResolveActionCallback, expireAfter time.Duration) Resolver {
 	if client == nil {
 		client = &http.Client{}
 	}
@@ -274,7 +279,11 @@ func NewHttpResolver(client HTTPClient, resolverFactory func(*Entries) Resolver,
 		}
 	}
 	if nsResolveCallback == nil {
-		nsResolveCallback = func(string) NSResolveActionEnum {
+		nsResolveCallback = func(name string, namespace scope) NSResolveActionEnum {
+			if !namespace.Contains(name) {
+				logrus.Debugf("Ignoring extension namespace %q which isn't an ancestor of %q", namespace, name)
+				return NSResolveActionIgnore
+			}
 			return NSResolveActionRecurse
 		}
 	}
@@ -293,12 +302,16 @@ func (hr *httpResolver) nameToURL(name string) string {
 
 func (hr *httpResolver) resolveEntries(es *Entries, visited map[string]struct{}, name string) error {
 	cached, exists := hr.cache[name]
-	if exists && !cached.created.Add(hr.expireAfter).After(time.Now()) {
+	if exists && !cached.created.Add(hr.expireAfter).Before(time.Now()) {
 		entries, err := hr.resolverFactory(cached.entries).Resolve(name)
 		if err != nil {
 			return err
 		}
-		es.Join(entries)
+		entries, err = es.Join(entries)
+		if err != nil {
+			return err
+		}
+		*es = *entries
 		return nil
 	}
 	if exists {
@@ -323,24 +336,21 @@ func (hr *httpResolver) resolveEntries(es *Entries, visited map[string]struct{},
 	// handle scope extensions
 	extensions := []string{}
 	entriesToRemove := []*Entry{}
-	for i, entry := range entries.entries {
-		if entry.action == actionNamespace {
+	for i := range entries.entries {
+		if entries.entries[i].action == actionNamespace {
 			argsToRemove := make(map[string]struct{})
-			for _, arg := range entry.args {
+			for _, arg := range entries.entries[i].args {
 				// When arg is not the name, also use additional scope
 				if arg != name {
 					scope, err := parseScope(arg)
 					if err != nil {
 						return err
 					}
-					switch hr.nsResolveCallback(name) {
+					switch hr.nsResolveCallback(name, scope) {
 					case NSResolveActionIgnore:
 						argsToRemove[arg] = struct{}{}
 					case NSResolveActionPass:
 					case NSResolveActionRecurse:
-						if !scope.Contains(name) {
-							return errors.New("invalid extension: must extend ancestor scope")
-						}
 						if _, exists := visited[arg]; !exists {
 							extensions = append(extensions, arg)
 						}
@@ -348,16 +358,18 @@ func (hr *httpResolver) resolveEntries(es *Entries, visited map[string]struct{},
 				}
 			}
 			if len(argsToRemove) > 0 {
-				newArgs := make([]string, 0, len(entry.args)-len(argsToRemove))
-				for _, arg := range entry.args {
+				newArgs := make([]string, 0, len(entries.entries[i].args)-len(argsToRemove))
+				for _, arg := range entries.entries[i].args {
 					if _, exists := argsToRemove[arg]; !exists {
 						newArgs = append(newArgs, arg)
 					}
 				}
-				entry.args = newArgs
+				entries.entries[i].args = newArgs
 			}
-			if len(entry.args) < 1 {
-				entriesToRemove = append(entriesToRemove, &entries.entries[i])
+			if len(entries.entries[i].args) < 1 {
+				if hr.nsResolveCallback(name, "") == NSResolveActionIgnore {
+					entriesToRemove = append(entriesToRemove, &entries.entries[i])
+				}
 			}
 		}
 	}

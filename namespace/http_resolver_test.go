@@ -119,7 +119,9 @@ func TestParseHtmlHeadBad(t *testing.T) {
 	}
 }
 
-func assertHTTPResolve(t *testing.T, r Resolver, name, matchString string) {
+func assertHTTPResolve(t *testing.T, r Resolver, name, matchString string, shouldContactServer bool) {
+	testServerName := strings.SplitN(name, "/", 2)[0]
+	lastAccess := testServerLastAccessed[testServerName]
 	matchEntries := mustEntries(matchString)
 
 	entries, err := r.Resolve(name)
@@ -127,46 +129,70 @@ func assertHTTPResolve(t *testing.T, r Resolver, name, matchString string) {
 		t.Fatalf("Failed to resolve name %q: %v", name, err)
 	}
 	if len(entries.entries) != len(matchEntries.entries) {
-		t.Fatalf("Unexpected number of entries for %q: %d, expected %d", name, len(entries.entries), len(matchEntries.entries))
+		t.Errorf("Unexpected number of entries for %q: %d, expected %d", name, len(entries.entries), len(matchEntries.entries))
 	}
 
 	for i := range entries.entries {
 		assertEntryEqual(t, entries.entries[i], matchEntries.entries[i])
 	}
+
+	if shouldContactServer {
+		if !testServerLastAccessed[testServerName].After(lastAccess) {
+			t.Errorf("Resolver should have accessed test server %s when querying %s", testServerName, name)
+		}
+	} else {
+		if testServerLastAccessed[testServerName].After(lastAccess) {
+			t.Errorf("Resolver should have hit cache when querying %s", name)
+		}
+	}
+
 }
 
-func TestHttpResolverIgnoringExtensions(t *testing.T) {
-	r := NewHttpResolver(newMockHTTPClient(), nil, func(string) NSResolveActionEnum { return NSResolveActionIgnore }, time.Minute)
+func TestHTTPResolverIgnoringExtensions(t *testing.T) {
+	r := NewHTTPResolver(newMockHTTPClient(), nil, func(string, scope) NSResolveActionEnum { return NSResolveActionIgnore }, time.Minute)
 
 	assertHTTPResolve(t, r, "example.com/library/bar", `
 example.com			index	https://search.example.com/
 example.com			pull	https://registry.example.com/v1/ version=1.0 trim
 example.com			push	https://registry.example.com/v1/ version=1.0 trim
-`)
+`, true)
 
 	assertHTTPResolve(t, r, "example.com/foo/app", `
 example.com/foo		index	https://search.foo.com/
 example.com/foo		pull	https://mirror.foo.com/v1/ version=1.0
 example.com/foo		push	https://registry.foo.com/v1/ version=1.0
-`)
+`, true)
 
 	assertHTTPResolve(t, r, "example.com/project/main", `
 example.com/project/main index https://search.project.com/
 example.com/project/main pull https://mirror.project.com/v2/ version=2.0.1
 example.com/project/main push https://registry-1.project.com/v2/ version=2.0.1
-`)
+`, true)
 
-	/* TODO: test bad queries */
+	// hit cache
+	assertHTTPResolve(t, r, "example.com/library/bar", `
+example.com			index	https://search.example.com/
+example.com			pull	https://registry.example.com/v1/ version=1.0 trim
+example.com			push	https://registry.example.com/v1/ version=1.0 trim
+`, false)
+
+	name := "example.com/foo/not/existent"
+	entries, err := r.Resolve(name)
+	if err == nil {
+		t.Errorf("Resolving of %q should have failed but returned entries: %v", name, entries)
+	} else if !strings.Contains(err.Error(), "404") {
+		t.Errorf("Expected 404 error, got: %v", err)
+	}
 }
 
-func TestHttpRecursiveResolver(t *testing.T) {
-	r := NewHttpResolver(newMockHTTPClient(), nil, func(string) NSResolveActionEnum { return NSResolveActionRecurse }, time.Minute)
+func TestHTTPRecursiveResolver(t *testing.T) {
+	r := NewHTTPResolver(newMockHTTPClient(), nil, nil, time.Minute)
 
 	assertHTTPResolve(t, r, "example.com/library/bar", `
 example.com			index	https://search.example.com/
 example.com			pull	https://registry.example.com/v1/ version=1.0 trim
 example.com			push	https://registry.example.com/v1/ version=1.0 trim
-`)
+`, true)
 
 	assertHTTPResolve(t, r, "example.com/foo/app", `
 example.com/foo		index	  https://search.foo.com/
@@ -176,12 +202,88 @@ example.com/foo     namespace example.com
 example.com			index	  https://search.example.com/
 example.com			pull	  https://registry.example.com/v1/ version=1.0 trim
 example.com			push	  https://registry.example.com/v1/ version=1.0 trim
-`)
+`, true)
 
-	/* TODO: test bad queries */
-	/* TODO: test that repeated queries hit the cache */
+	// This time hit the cache
+	assertHTTPResolve(t, r, "example.com/library/bar", `
+example.com			index	https://search.example.com/
+example.com			pull	https://registry.example.com/v1/ version=1.0 trim
+example.com			push	https://registry.example.com/v1/ version=1.0 trim
+`, false)
+
+	assertHTTPResolve(t, r, "other.com/big/foo/app", `
+other.com/big/foo/app	index		https://index.big.com/v1/
+other.com/big/foo/app	pull		https://mirror.other.com/v2/ version=2.0
+other.com/big/foo/app	push		https://mirror.other.com/v2/ version=2.0
+other.com/big/foo/app   namespace	other.com
+other.com				index		https://other.com/v1/
+other.com				pull		https://mirror.other.com/v2/   version=2.0
+other.com				push		https://registry.other.com/v1/ version=1.0
+`, true)
+
+	assertHTTPResolve(t, r, "other.com", `
+other.com			index	https://other.com/v1/
+other.com           pull	https://mirror.other.com/v2/	version=2.0
+other.com           push	https://registry.other.com/v1/  version=1.0
+`, false)
+
+	assertHTTPResolve(t, r, "other.com/big/foo", `
+other.com/big/foo	namespace	other.com/big
+other.com			index	https://other.com/v1/
+other.com           pull	https://mirror.other.com/v2/   version=2.0
+other.com           push	https://registry.other.com/v1/ version=1.0
+`, true)
+
+	// now allow namespace extensions not having the same prefix
+	r = NewHTTPResolver(newMockHTTPClient(), nil, func(string, scope) NSResolveActionEnum { return NSResolveActionRecurse }, time.Minute)
+	assertHTTPResolve(t, r, "other.com/big/foo/app", `
+other.com/big/foo/app		index		https://index.big.com/v1/
+other.com/big/foo/app		pull		https://mirror.other.com/v2/ version=2.0
+other.com/big/foo/app		push		https://mirror.other.com/v2/ version=2.0
+other.com/big/foo/app       namespace   example.com/project other.com
+example.com/project			index		https://search.company.ltd/
+example.com/project			pull		https://registry.company.ltd/v2/ version=2.0 trim
+example.com/project			push		https://registry.company.ltd/v2/ version=2.0 trim
+example.com/project         namespace               
+other.com					index		https://other.com/v1/
+other.com					pull		https://mirror.other.com/v2/   version=2.0
+other.com					push		https://registry.other.com/v1/ version=1.0
+`, true)
+
+	name := "example.com/foo/not/existent"
+	entries, err := r.Resolve(name)
+	if err == nil {
+		t.Errorf("Resolving of %q should have failed but returned entries: %v", name, entries)
+	} else if !strings.Contains(err.Error(), "404") {
+		t.Errorf("Expected 404 error, got: %v", err)
+	}
 }
 
 func TestHTTPResolverPassingExtensions(t *testing.T) {
-	/* TODO */
+	r := NewHTTPResolver(newMockHTTPClient(), nil, func(string, scope) NSResolveActionEnum { return NSResolveActionPass }, time.Minute)
+	assertHTTPResolve(t, r, "example.com/foo/app", `
+example.com/foo		index	  https://search.foo.com/
+example.com/foo		pull	  https://mirror.foo.com/v1/ version=1.0
+example.com/foo		push	  https://registry.foo.com/v1/ version=1.0
+example.com/foo     namespace example.com
+`, true)
+
+	assertHTTPResolve(t, r, "other.com/big/foo", `
+other.com/big/foo	namespace	other.com/big
+`, true)
+
+	assertHTTPResolve(t, r, "other.com/big/foo/app", `
+other.com/big/foo/app		index		https://index.big.com/v1/
+other.com/big/foo/app		pull		https://mirror.other.com/v2/ version=2.0
+other.com/big/foo/app		push		https://mirror.other.com/v2/ version=2.0
+other.com/big/foo/app		namespace	example.com/project other.com
+`, true)
+
+	name := "example.com/foo/not/existent"
+	entries, err := r.Resolve(name)
+	if err == nil {
+		t.Errorf("Resolving of %q should have failed but returned entries: %v", name, entries)
+	} else if !strings.Contains(err.Error(), "404") {
+		t.Errorf("Expected 404 error, got: %v", err)
+	}
 }

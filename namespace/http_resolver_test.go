@@ -149,7 +149,12 @@ func assertHTTPResolve(t *testing.T, r Resolver, name, matchString string, shoul
 }
 
 func TestHTTPResolverIgnoringExtensions(t *testing.T) {
-	r := NewHTTPResolver(newMockHTTPClient(), nil, func(string, scope) NSResolveActionEnum { return NSResolveActionIgnore }, time.Minute)
+	config := HTTPResolverConfig{
+		Client:            newMockHTTPClient(),
+		NSResolveCallback: func(string, scope) NSResolveActionEnum { return NSResolveActionIgnore },
+		ExpireAfter:       time.Minute,
+	}
+	r := NewHTTPResolver(&config)
 
 	assertHTTPResolve(t, r, "example.com/library/bar", `
 example.com			index	https://search.example.com/
@@ -186,7 +191,11 @@ example.com			push	https://registry.example.com/v1/ version=1.0 trim
 }
 
 func TestHTTPRecursiveResolver(t *testing.T) {
-	r := NewHTTPResolver(newMockHTTPClient(), nil, nil, time.Minute)
+	config := HTTPResolverConfig{
+		Client:      newMockHTTPClient(),
+		ExpireAfter: time.Minute,
+	}
+	r := NewHTTPResolver(&config)
 
 	assertHTTPResolve(t, r, "example.com/library/bar", `
 example.com			index	https://search.example.com/
@@ -235,7 +244,8 @@ other.com           push	https://registry.other.com/v1/ version=1.0
 `, true)
 
 	// now allow namespace extensions not having the same prefix
-	r = NewHTTPResolver(newMockHTTPClient(), nil, func(string, scope) NSResolveActionEnum { return NSResolveActionRecurse }, time.Minute)
+	config.NSResolveCallback = func(string, scope) NSResolveActionEnum { return NSResolveActionRecurse }
+	r = NewHTTPResolver(&config)
 	assertHTTPResolve(t, r, "other.com/big/foo/app", `
 other.com/big/foo/app		index		https://index.big.com/v1/
 other.com/big/foo/app		pull		https://mirror.other.com/v2/ version=2.0
@@ -260,7 +270,12 @@ other.com					push		https://registry.other.com/v1/ version=1.0
 }
 
 func TestHTTPResolverPassingExtensions(t *testing.T) {
-	r := NewHTTPResolver(newMockHTTPClient(), nil, func(string, scope) NSResolveActionEnum { return NSResolveActionPass }, time.Minute)
+	config := HTTPResolverConfig{
+		Client:            newMockHTTPClient(),
+		NSResolveCallback: func(string, scope) NSResolveActionEnum { return NSResolveActionPass },
+		ExpireAfter:       time.Minute,
+	}
+	r := NewHTTPResolver(&config)
 	assertHTTPResolve(t, r, "example.com/foo/app", `
 example.com/foo		index	  https://search.foo.com/
 example.com/foo		pull	  https://mirror.foo.com/v1/ version=1.0

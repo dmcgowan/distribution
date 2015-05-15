@@ -32,6 +32,21 @@ const (
 
 type NSResolveActionCallback func(name string, namespace scope) NSResolveActionEnum
 
+type HTTPResolverConfig struct {
+	/* Client returns a resolver which will be called on fetched entries. */
+	Client HTTPClient
+	/* Factory creating resolver for fetched entries. */
+	ResolverFactory func(*Entries) Resolver
+	/* NSResolveCallback is called for every namespace extension with a name being
+	 * resolved. It shall return desired action. If not given, all namespace
+	 * extensions which are ancestors to namespace being resolved will be processed
+	 * recursively. Others will be ignored. Namespace can be empty denoting namespace
+	 * entry without any arguments. */
+	NSResolveCallback NSResolveActionCallback
+	/* Time interval saying how long to keep entries in cache. */
+	ExpireAfter time.Duration
+}
+
 type htmlMetaTagEnum int
 
 const (
@@ -64,14 +79,6 @@ type cacheEntry struct {
 
 func newCacheEntry(entries *Entries) cacheEntry {
 	return cacheEntry{time.Now(), entries}
-}
-
-type httpResolver struct {
-	client            HTTPClient
-	resolverFactory   func(*Entries) Resolver
-	nsResolveCallback NSResolveActionCallback
-	expireAfter       time.Duration
-	cache             map[string]cacheEntry
 }
 
 func (m htmlMetaTagEnum) String() string {
@@ -259,27 +266,33 @@ ParsingLoop:
 	return entries, nil
 }
 
+type httpResolver struct {
+	config *HTTPResolverConfig
+	cache  map[string]cacheEntry
+}
+
 /* Create base HTTP resolver.
  *
- * resolverFactory returns a resolver which will be called on fetched entries.
- * nsResolveCallback is called for every namespace extension with a name being
- *     resolved. It shall return desired action. If not given, all namespace
- *     extensions which are ancestors to namespace being resolved will be processed
- *     recursively. Others will be ignored. Namespace can be empty denoting namespace
- *     entry without any arguments.
- * expireAfter time interval saying how long to keep entries in cache
+ * It uses discovery process to fetch scope entries. Multiple discovery
+ * endpoints may be queried during single `Resolve()` call depending on scope's
+ * namespace extensions and given callback.
+ *
+ * It caches fetched entries for further lookups.
  */
-func NewHTTPResolver(client HTTPClient, resolverFactory func(*Entries) Resolver, nsResolveCallback NSResolveActionCallback, expireAfter time.Duration) Resolver {
-	if client == nil {
-		client = &http.Client{}
+func NewHTTPResolver(config *HTTPResolverConfig) Resolver {
+	if config == nil {
+		config = &HTTPResolverConfig{}
 	}
-	if resolverFactory == nil {
-		resolverFactory = func(entries *Entries) Resolver {
+	if config.Client == nil {
+		config.Client = &http.Client{}
+	}
+	if config.ResolverFactory == nil {
+		config.ResolverFactory = func(entries *Entries) Resolver {
 			return NewSimpleResolver(entries, true)
 		}
 	}
-	if nsResolveCallback == nil {
-		nsResolveCallback = func(name string, namespace scope) NSResolveActionEnum {
+	if config.NSResolveCallback == nil {
+		config.NSResolveCallback = func(name string, namespace scope) NSResolveActionEnum {
 			if !namespace.Contains(name) {
 				logrus.Debugf("Ignoring extension namespace %q which isn't an ancestor of %q", namespace, name)
 				return NSResolveActionIgnore
@@ -288,11 +301,8 @@ func NewHTTPResolver(client HTTPClient, resolverFactory func(*Entries) Resolver,
 		}
 	}
 	return &httpResolver{
-		client:            client,
-		resolverFactory:   resolverFactory,
-		nsResolveCallback: nsResolveCallback,
-		expireAfter:       expireAfter,
-		cache:             make(map[string]cacheEntry),
+		config: config,
+		cache:  make(map[string]cacheEntry),
 	}
 }
 
@@ -302,8 +312,8 @@ func (hr *httpResolver) nameToURL(name string) string {
 
 func (hr *httpResolver) resolveEntries(es *Entries, visited map[string]struct{}, name string) error {
 	cached, exists := hr.cache[name]
-	if exists && !cached.created.Add(hr.expireAfter).Before(time.Now()) {
-		entries, err := hr.resolverFactory(cached.entries).Resolve(name)
+	if exists && !cached.created.Add(hr.config.ExpireAfter).Before(time.Now()) {
+		entries, err := hr.config.ResolverFactory(cached.entries).Resolve(name)
 		if err != nil {
 			return err
 		}
@@ -317,7 +327,7 @@ func (hr *httpResolver) resolveEntries(es *Entries, visited map[string]struct{},
 	if exists {
 		delete(hr.cache, name)
 	}
-	resp, err := hr.client.Get(hr.nameToURL(name))
+	resp, err := hr.config.Client.Get(hr.nameToURL(name))
 	// TODO: recursive resolver should allow for ignoring errors of scope extensions
 	if err != nil {
 		return err
@@ -346,7 +356,7 @@ func (hr *httpResolver) resolveEntries(es *Entries, visited map[string]struct{},
 					if err != nil {
 						return err
 					}
-					switch hr.nsResolveCallback(name, scope) {
+					switch hr.config.NSResolveCallback(name, scope) {
 					case NSResolveActionIgnore:
 						argsToRemove[arg] = struct{}{}
 					case NSResolveActionPass:
@@ -367,7 +377,7 @@ func (hr *httpResolver) resolveEntries(es *Entries, visited map[string]struct{},
 				entries.entries[i].args = newArgs
 			}
 			if len(entries.entries[i].args) < 1 {
-				if hr.nsResolveCallback(name, "") == NSResolveActionIgnore {
+				if hr.config.NSResolveCallback(name, "") == NSResolveActionIgnore {
 					entriesToRemove = append(entriesToRemove, &entries.entries[i])
 				}
 			}

@@ -50,6 +50,7 @@ var (
 			"big/foo/test",
 			"big/foo/app",
 			"big/user/bar",
+			"bad/bar",
 		},
 	}
 
@@ -94,8 +95,14 @@ var (
 		"other.com/big/foo/app": {
 			{htmlMetaTagScope, []string{"other.com/big/foo/app"}},
 			{htmlMetaTagIndex, []string{"https://index.big.com/v1/"}},
-			{htmlMetaTagRegistry, []string{"https://mirror.other.com/v2/", "version=2.0"}},
+			{htmlMetaTagRegistry, []string{"https://registry.other.com/v2/", "version=2.0"}},
 			{htmlMetaTagNamespace, []string{"example.com/project", "other.com"}},
+		},
+		"other.com/bad": {
+			{htmlMetaTagScope, []string{"other.com/bad"}},
+			{htmlMetaTagIndex, []string{"https://index.bad.com/v1/"}},
+			{htmlMetaTagRegistry, []string{"https://registry.bad.com/v2/", "version=2.0.1"}},
+			{htmlMetaTagNamespace, []string{"other.com/not/found", "not.reachable.server", "example.com"}},
 		},
 	}
 
@@ -103,7 +110,9 @@ var (
 	testScopeList []string
 
 	// maps <address>:<port> to corresponding server name (e.g. example.com)
-	testServerAddrToName map[string]string
+	testServerAddrToName = map[string]string{
+		"41:41:41:41": "not.reachable.server",
+	}
 
 	// contains netries <serverName> : <timeOfLastAccess>
 	testServerLastAccessed map[string]time.Time
@@ -121,7 +130,6 @@ func init() {
 	exampleServer = httptest.NewTLSServer(handlerAccessLog(r))
 	otherServer = httptest.NewTLSServer(handlerAccessLog(r))
 
-	testServerAddrToName = make(map[string]string, 2)
 	testServerLastAccessed = make(map[string]time.Time, 2)
 	for _, tup := range []struct{ name, url string }{
 		{"example.com", exampleServer.URL},
@@ -144,11 +152,13 @@ type mockHTTPClient struct {
 }
 
 func (c *mockHTTPClient) Get(url string) (*http.Response, error) {
-	newURL := strings.Replace(url, "https://example.com", exampleServer.URL, 1)
-	if newURL == url {
-		newURL = strings.Replace(url, "https://other.com", otherServer.URL, 1)
+	for addr, name := range testServerAddrToName {
+		newURL := strings.Replace(url, "https://"+name, "https://"+addr, 1)
+		if newURL != url {
+			return c.Client.Get(newURL)
+		}
 	}
-	return c.Client.Get(newURL)
+	panic(fmt.Sprintf("trying to reach external domain %q", url))
 }
 
 func newMockHTTPClient() *mockHTTPClient {

@@ -37,6 +37,9 @@ type HTTPResolverConfig struct {
 	Client HTTPClient
 	/* Factory creating resolver for fetched entries. */
 	ResolverFactory func(*Entries) Resolver
+	/* Don't terminate resolution because of errors during fetching from extension
+	* namespaces. */
+	IgnoreNSDiscoveryErrors bool
 	/* NSResolveCallback is called for every namespace extension with a name being
 	 * resolved. It shall return desired action. If not given, all namespace
 	 * extensions which are ancestors to namespace being resolved will be processed
@@ -328,7 +331,6 @@ func (hr *httpResolver) resolveEntries(es *Entries, visited map[string]struct{},
 		delete(hr.cache, name)
 	}
 	resp, err := hr.config.Client.Get(hr.nameToURL(name))
-	// TODO: recursive resolver should allow for ignoring errors of scope extensions
 	if err != nil {
 		return err
 	}
@@ -388,13 +390,23 @@ func (hr *httpResolver) resolveEntries(es *Entries, visited map[string]struct{},
 		entries.Remove(*entryPtr)
 	}
 
+	recursingSuccessful := true
 	visited[name] = struct{}{}
 	for _, ext := range extensions {
 		if err = hr.resolveEntries(entries, visited, ext); err != nil {
-			return err
+			if hr.config.IgnoreNSDiscoveryErrors {
+				recursingSuccessful = false
+				logrus.Warnf("Ignoring discovery error for extension namespace %q: %v", ext, err)
+			} else {
+				return err
+			}
 		}
 	}
-	hr.cache[name] = newCacheEntry(entries)
+	if recursingSuccessful {
+		/* Don't cache entries if there was any error during recursive discovery.
+		 * FIXME: this check doesn't recognize errors happening below recursion level 1 */
+		hr.cache[name] = newCacheEntry(entries)
+	}
 	if entries, err = es.Join(entries); err != nil {
 		return err
 	}

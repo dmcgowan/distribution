@@ -222,8 +222,8 @@ example.com			push	https://registry.example.com/v1/ version=1.0 trim
 
 	assertHTTPResolve(t, r, "other.com/big/foo/app", `
 other.com/big/foo/app	index		https://index.big.com/v1/
-other.com/big/foo/app	pull		https://mirror.other.com/v2/ version=2.0
-other.com/big/foo/app	push		https://mirror.other.com/v2/ version=2.0
+other.com/big/foo/app	pull		https://registry.other.com/v2/ version=2.0
+other.com/big/foo/app	push		https://registry.other.com/v2/ version=2.0
 other.com/big/foo/app   namespace	other.com
 other.com				index		https://other.com/v1/
 other.com				pull		https://mirror.other.com/v2/   version=2.0
@@ -248,8 +248,8 @@ other.com           push	https://registry.other.com/v1/ version=1.0
 	r = NewHTTPResolver(&config)
 	assertHTTPResolve(t, r, "other.com/big/foo/app", `
 other.com/big/foo/app		index		https://index.big.com/v1/
-other.com/big/foo/app		pull		https://mirror.other.com/v2/ version=2.0
-other.com/big/foo/app		push		https://mirror.other.com/v2/ version=2.0
+other.com/big/foo/app		pull		https://registry.other.com/v2/ version=2.0
+other.com/big/foo/app		push		https://registry.other.com/v2/ version=2.0
 other.com/big/foo/app       namespace   example.com/project other.com
 example.com/project			index		https://search.company.ltd/
 example.com/project			pull		https://registry.company.ltd/v2/ version=2.0 trim
@@ -289,8 +289,8 @@ other.com/big/foo	namespace	other.com/big
 
 	assertHTTPResolve(t, r, "other.com/big/foo/app", `
 other.com/big/foo/app		index		https://index.big.com/v1/
-other.com/big/foo/app		pull		https://mirror.other.com/v2/ version=2.0
-other.com/big/foo/app		push		https://mirror.other.com/v2/ version=2.0
+other.com/big/foo/app		pull		https://registry.other.com/v2/ version=2.0
+other.com/big/foo/app		push		https://registry.other.com/v2/ version=2.0
 other.com/big/foo/app		namespace	example.com/project other.com
 `, true)
 
@@ -300,5 +300,66 @@ other.com/big/foo/app		namespace	example.com/project other.com
 		t.Errorf("Resolving of %q should have failed but returned entries: %v", name, entries)
 	} else if !strings.Contains(err.Error(), "404") {
 		t.Errorf("Expected 404 error, got: %v", err)
+	}
+}
+
+func TestHTTPResolverIgnoreNSDiscoveryErrors(t *testing.T) {
+	config := HTTPResolverConfig{
+		Client:                  newMockHTTPClient(),
+		IgnoreNSDiscoveryErrors: false,
+		NSResolveCallback:       func(string, scope) NSResolveActionEnum { return NSResolveActionRecurse },
+		ExpireAfter:             time.Minute,
+	}
+	r := NewHTTPResolver(&config)
+
+	// resolution should fail because of error during discovery on other.com/not/found
+	name := "other.com/bad/bar"
+	entries, err := r.Resolve(name)
+	if err == nil {
+		t.Errorf("Resolving of %q should have failed but returned entries: %v", name, entries)
+	} else if !strings.Contains(err.Error(), "404") {
+		t.Errorf("Expected 404 error, got: %v", err)
+	}
+
+	// resolution should succeed because the error is ignored
+	config.IgnoreNSDiscoveryErrors = true
+	r = NewHTTPResolver(&config)
+	assertHTTPResolve(t, r, name, `
+other.com/bad	index		https://index.bad.com/v1/
+other.com/bad	pull		https://registry.bad.com/v2/ version=2.0.1
+other.com/bad	push		https://registry.bad.com/v2/ version=2.0.1
+other.com/bad	namespace	other.com/not/found not.reachable.server example.com
+example.com		index		https://search.example.com/
+example.com		pull		https://registry.example.com/v1/ version=1.0 trim
+example.com		push		https://registry.example.com/v1/ version=1.0 trim
+`, true)
+
+	// try again ensuring we don't hit cache
+	assertHTTPResolve(t, r, name, `
+other.com/bad	index		https://index.bad.com/v1/
+other.com/bad	pull		https://registry.bad.com/v2/ version=2.0.1
+other.com/bad	push		https://registry.bad.com/v2/ version=2.0.1
+other.com/bad	namespace	other.com/not/found not.reachable.server example.com
+example.com		index		https://search.example.com/
+example.com		pull		https://registry.example.com/v1/ version=1.0 trim
+example.com		push		https://registry.example.com/v1/ version=1.0 trim
+`, true)
+
+	// following shall stil fail even though ignoring errors
+	name = "example.com/foo/not/existent"
+	entries, err = r.Resolve(name)
+	if err == nil {
+		t.Errorf("Resolving of %q should have failed but returned entries: %v", name, entries)
+	} else if !strings.Contains(err.Error(), "404") {
+		t.Errorf("Expected 404 error, got: %v", err)
+	}
+
+	// following shall stil fail even though ignoring errors
+	name = "not.reachable.server/foo/bar"
+	entries, err = r.Resolve(name)
+	if err == nil {
+		t.Errorf("Resolving of %q should have failed but returned entries: %v", name, entries)
+	} else if !strings.Contains(err.Error(), "dial tcp") {
+		t.Errorf("Expected dial tcp error, got: %v", err)
 	}
 }

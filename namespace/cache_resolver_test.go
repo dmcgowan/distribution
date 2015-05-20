@@ -6,11 +6,7 @@ import (
 )
 
 func TestCacheResolverDefaultSettings(t *testing.T) {
-	config := HTTPResolverConfig{
-		Client:            newMockHTTPClient(),
-		NSResolveCallback: func(string, scope) NSResolveActionEnum { return NSResolveActionIgnore },
-	}
-	hr := NewHTTPResolver(&config)
+	hr := NewHTTPResolver(&HTTPResolverConfig{Client: newMockHTTPClient()})
 	cr := NewCacheResolver(hr, nil)
 
 	assertHTTPResolve(t, cr, "example.com/library/bar", `
@@ -23,6 +19,7 @@ example.com			push	https://registry.example.com/v1/ version=1.0 trim
 example.com/foo		index	https://search.foo.com/
 example.com/foo		pull	https://mirror.foo.com/v1/ version=1.0
 example.com/foo		push	https://registry.foo.com/v1/ version=1.0
+example.com/foo     namespace	example.com
 `, true)
 
 	// hit cache
@@ -36,21 +33,19 @@ example.com			push	https://registry.example.com/v1/ version=1.0 trim
 example.com/foo		index	https://search.foo.com/
 example.com/foo		pull	https://mirror.foo.com/v1/ version=1.0
 example.com/foo		push	https://registry.foo.com/v1/ version=1.0
+example.com/foo     namespace	example.com
 `, false)
 }
 
 func TestCacheResolverReachMaxCapacity(t *testing.T) {
-	config := HTTPResolverConfig{
-		Client:            newMockHTTPClient(),
-		NSResolveCallback: func(string, scope) NSResolveActionEnum { return NSResolveActionIgnore },
-	}
-	hr := NewHTTPResolver(&config)
+	hr := NewHTTPResolver(&HTTPResolverConfig{Client: newMockHTTPClient()})
 	cr := NewCacheResolver(hr, &CacheResolverConfig{MaxEntries: 2})
 
 	assertHTTPResolve(t, cr, "example.com/project/main", `
 example.com/project/main index https://search.project.com/
 example.com/project/main pull https://mirror.project.com/v2/ version=2.0.1
 example.com/project/main push https://registry-1.project.com/v2/ version=2.0.1
+example.com/project/main namespace	example.com/project
 `, true)
 
 	// reach max capacity
@@ -58,6 +53,7 @@ example.com/project/main push https://registry-1.project.com/v2/ version=2.0.1
 example.com/foo		index	https://search.foo.com/
 example.com/foo		pull	https://mirror.foo.com/v1/ version=1.0
 example.com/foo		push	https://registry.foo.com/v1/ version=1.0
+example.com/foo     namespace	example.com
 `, true)
 
 	// hit cache
@@ -65,12 +61,14 @@ example.com/foo		push	https://registry.foo.com/v1/ version=1.0
 example.com/project/main index https://search.project.com/
 example.com/project/main pull https://mirror.project.com/v2/ version=2.0.1
 example.com/project/main push https://registry-1.project.com/v2/ version=2.0.1
+example.com/project/main namespace	example.com/project
 `, false)
 
 	assertHTTPResolve(t, cr, "example.com/foo/app", `
 example.com/foo		index	https://search.foo.com/
 example.com/foo		pull	https://mirror.foo.com/v1/ version=1.0
 example.com/foo		push	https://registry.foo.com/v1/ version=1.0
+example.com/foo     namespace	example.com
 `, false)
 
 	// the first added entry gets removed
@@ -85,6 +83,7 @@ example.com			push	https://registry.example.com/v1/ version=1.0 trim
 example.com/foo		index	https://search.foo.com/
 example.com/foo		pull	https://mirror.foo.com/v1/ version=1.0
 example.com/foo		push	https://registry.foo.com/v1/ version=1.0
+example.com/foo     namespace	example.com
 `, false)
 
 	// no longer in cache
@@ -92,6 +91,7 @@ example.com/foo		push	https://registry.foo.com/v1/ version=1.0
 example.com/project/main index https://search.project.com/
 example.com/project/main pull https://mirror.project.com/v2/ version=2.0.1
 example.com/project/main push https://registry-1.project.com/v2/ version=2.0.1
+example.com/project/main namespace	example.com/project
 `, true)
 
 	// newest entry in cache
@@ -103,17 +103,14 @@ example.com			push	https://registry.example.com/v1/ version=1.0 trim
 }
 
 func TestCacheResolverCollectsExpired(t *testing.T) {
-	config := HTTPResolverConfig{
-		Client:            newMockHTTPClient(),
-		NSResolveCallback: func(string, scope) NSResolveActionEnum { return NSResolveActionIgnore },
-	}
-	hr := NewHTTPResolver(&config)
+	hr := NewHTTPResolver(&HTTPResolverConfig{Client: newMockHTTPClient()})
 	cr := NewCacheResolver(hr, &CacheResolverConfig{ExpireAfter: time.Millisecond})
 
 	assertHTTPResolve(t, cr, "example.com/project/main", `
 example.com/project/main index https://search.project.com/
 example.com/project/main pull https://mirror.project.com/v2/ version=2.0.1
 example.com/project/main push https://registry-1.project.com/v2/ version=2.0.1
+example.com/project/main namespace	example.com/project
 `, true)
 
 	// hit cache
@@ -121,6 +118,7 @@ example.com/project/main push https://registry-1.project.com/v2/ version=2.0.1
 example.com/project/main index https://search.project.com/
 example.com/project/main pull https://mirror.project.com/v2/ version=2.0.1
 example.com/project/main push https://registry-1.project.com/v2/ version=2.0.1
+example.com/project/main namespace	example.com/project
 `, false)
 
 	time.Sleep(time.Millisecond * 2)
@@ -130,5 +128,6 @@ example.com/project/main push https://registry-1.project.com/v2/ version=2.0.1
 example.com/project/main index https://search.project.com/
 example.com/project/main pull https://mirror.project.com/v2/ version=2.0.1
 example.com/project/main push https://registry-1.project.com/v2/ version=2.0.1
+example.com/project/main namespace	example.com/project
 `, true)
 }

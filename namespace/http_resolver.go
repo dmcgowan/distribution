@@ -7,7 +7,6 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/Sirupsen/logrus"
 	"golang.org/x/net/html"
 )
 
@@ -16,35 +15,19 @@ type HTTPClient interface {
 	Get(url string) (*http.Response, error)
 }
 
-type NSResolveActionEnum int
-
-const (
-	/* Add namespace entries to resulting list of entries and
-	 * recursively fetch them (perform discovery on them). */
-	NSResolveActionRecurse NSResolveActionEnum = iota
-	// Don't add namespace entries to the resulting list.
-	NSResolveActionIgnore
-	/* Just add namespace entries to the resulting list.
-	 * Don't perform discovery on them. */
-	NSResolveActionPass
-)
-
-type NSResolveActionCallback func(name string, namespace scope) NSResolveActionEnum
-
 type HTTPResolverConfig struct {
 	/* Client returns a resolver which will be called on fetched entries. */
 	Client HTTPClient
-	/* Factory creating resolver for fetched entries. */
+	/* Factory creating resolver for fetched entries. By default, simple
+	* resolver will be used. */
 	ResolverFactory func(*Entries) Resolver
-	/* Don't terminate resolution because of errors during fetching from extension
-	* namespaces. */
-	IgnoreNSDiscoveryErrors bool
-	/* NSResolveCallback is called for every namespace extension with a name being
-	 * resolved. It shall return desired action. If not given, all namespace
-	 * extensions which are ancestors to namespace being resolved will be processed
-	 * recursively. Others will be ignored. Namespace can be empty denoting namespace
-	 * entry without any arguments. */
-	NSResolveCallback NSResolveActionCallback
+}
+
+/* If passed in config to httpResolver, it will cause fetched entries to be
+ * returned as a result of `Result()` call  without any modification or checks.
+ */
+func PassEntriesResolverFactory(entries *Entries) Resolver {
+	return &passEntriesResolver{entries}
 }
 
 type htmlMetaTagEnum int
@@ -279,15 +262,6 @@ func NewHTTPResolver(config *HTTPResolverConfig) Resolver {
 			return NewSimpleResolver(entries, true)
 		}
 	}
-	if config.NSResolveCallback == nil {
-		config.NSResolveCallback = func(name string, namespace scope) NSResolveActionEnum {
-			if !namespace.Contains(name) {
-				logrus.Debugf("Ignoring extension namespace %q which isn't an ancestor of %q", namespace, name)
-				return NSResolveActionIgnore
-			}
-			return NSResolveActionRecurse
-		}
-	}
 	return &httpResolver{
 		config: config,
 	}
@@ -297,88 +271,30 @@ func (hr *httpResolver) nameToURL(name string) string {
 	return "https://" + name + "?docker-discovery=1"
 }
 
-func (hr *httpResolver) resolveEntries(es *Entries, visited map[string]struct{}, name string) error {
+func (hr *httpResolver) Resolve(name string) (*Entries, error) {
+	entries := NewEntries()
 	resp, err := hr.config.Client.Get(hr.nameToURL(name))
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("discovery endpoint %q replied with: %s", name, resp.Status)
+		return nil, fmt.Errorf("discovery endpoint %q replied with: %s", name, resp.Status)
 	}
 	defer resp.Body.Close()
 	// TODO: check content type
 
-	entries, err := parseHTMLHead(resp.Body, name)
+	entries, err = parseHTMLHead(resp.Body, name)
 	if err != nil {
-		return err
-	}
-
-	// handle scope extensions
-	extensions := []string{}
-	entriesToRemove := []*Entry{}
-	for i := range entries.entries {
-		if entries.entries[i].action == actionNamespace {
-			argsToRemove := make(map[string]struct{})
-			for _, arg := range entries.entries[i].args {
-				// When arg is not the name, also use additional scope
-				if arg != name {
-					scope, err := parseScope(arg)
-					if err != nil {
-						return err
-					}
-					switch hr.config.NSResolveCallback(name, scope) {
-					case NSResolveActionIgnore:
-						argsToRemove[arg] = struct{}{}
-					case NSResolveActionPass:
-					case NSResolveActionRecurse:
-						if _, exists := visited[arg]; !exists {
-							extensions = append(extensions, arg)
-						}
-					}
-				}
-			}
-			if len(argsToRemove) > 0 {
-				newArgs := make([]string, 0, len(entries.entries[i].args)-len(argsToRemove))
-				for _, arg := range entries.entries[i].args {
-					if _, exists := argsToRemove[arg]; !exists {
-						newArgs = append(newArgs, arg)
-					}
-				}
-				entries.entries[i].args = newArgs
-			}
-			if len(entries.entries[i].args) < 1 {
-				if hr.config.NSResolveCallback(name, "") == NSResolveActionIgnore {
-					entriesToRemove = append(entriesToRemove, &entries.entries[i])
-				}
-			}
-		}
-	}
-
-	for _, entryPtr := range entriesToRemove {
-		entries.Remove(*entryPtr)
-	}
-
-	visited[name] = struct{}{}
-	for _, ext := range extensions {
-		if err = hr.resolveEntries(entries, visited, ext); err != nil {
-			if hr.config.IgnoreNSDiscoveryErrors {
-				logrus.Warnf("Ignoring discovery error for extension namespace %q: %v", ext, err)
-			} else {
-				return err
-			}
-		}
-	}
-	if entries, err = es.Join(entries); err != nil {
-		return err
-	}
-	*es = *entries
-	return nil
-}
-
-func (hr *httpResolver) Resolve(name string) (*Entries, error) {
-	entries := NewEntries()
-	if err := hr.resolveEntries(entries, make(map[string]struct{}), name); err != nil {
 		return nil, err
 	}
-	return entries, nil
+
+	return hr.config.ResolverFactory(entries).Resolve(name)
+}
+
+type passEntriesResolver struct {
+	entries *Entries
+}
+
+func (pr *passEntriesResolver) Resolve(name string) (*Entries, error) {
+	return pr.entries, nil
 }

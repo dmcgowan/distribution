@@ -33,7 +33,7 @@ func PassEntriesResolverFactory(entries *Entries) Resolver {
 type htmlMetaTagEnum int
 
 const (
-	htmlMetaTagInvalid htmlMetaTagEnum = iota
+	htmlMetaTagUnknown htmlMetaTagEnum = iota
 	htmlMetaTagRegistryPull
 	htmlMetaTagRegistryPush
 	htmlMetaTagRegistry
@@ -91,6 +91,14 @@ func (m htmlMetaTagEnum) ToActions() []string {
 	return res
 }
 
+type unknownMetaTagError struct {
+	tag string
+}
+
+func (e *unknownMetaTagError) Error() string {
+	return fmt.Sprintf("unrecognized meta tag %q", e.tag)
+}
+
 func parseHTMLMetaTagName(name string) (htmlMetaTagEnum, error) {
 	switch strings.TrimSpace(name) {
 	case htmlMetaTagNameScope:
@@ -106,7 +114,7 @@ func parseHTMLMetaTagName(name string) (htmlMetaTagEnum, error) {
 	case htmlMetaTagNameNamespace:
 		return htmlMetaTagNamespace, nil
 	default:
-		return htmlMetaTagInvalid, fmt.Errorf("unsupported meta tag name=%q", name)
+		return htmlMetaTagUnknown, &unknownMetaTagError{name}
 	}
 }
 
@@ -121,7 +129,7 @@ func parseHTMLMetaTag(z *html.Tokenizer, name string) (scope, []Entry, error) {
 		attr, val, more := z.TagAttr()
 		switch string(attr) {
 		case "name":
-			if tag != htmlMetaTagInvalid {
+			if tag != htmlMetaTagUnknown {
 				return "", nil, fmt.Errorf("expected just one name attribute")
 			}
 			tag, err = parseHTMLMetaTagName(string(val))
@@ -146,7 +154,7 @@ func parseHTMLMetaTag(z *html.Tokenizer, name string) (scope, []Entry, error) {
 			break
 		}
 	}
-	if tag == htmlMetaTagInvalid {
+	if tag == htmlMetaTagUnknown {
 		return "", nil, fmt.Errorf("meta tag without name attribute")
 	}
 	if tag == htmlMetaTagScope {
@@ -196,6 +204,9 @@ ParsingLoop:
 				}
 				scp, newEntries, err := parseHTMLMetaTag(z, name)
 				if err != nil {
+					if _, ok := err.(*unknownMetaTagError); ok {
+						continue ParsingLoop
+					}
 					return nil, err
 				}
 				if scp == "" {

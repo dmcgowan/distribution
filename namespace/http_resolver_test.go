@@ -54,6 +54,15 @@ example.com/other  pull         https://other.example.com/v1/ version=1.0
 example.com/other  push         https://other.example.com/v1/ version=1.0
 `)
 
+	okBodyWithCustomMetaTag := `
+<meta name="docker-namespace" content=""></meta>
+<meta name="custom-meta-tag" content="nothing interesting"/>
+`
+
+	assertHTMLParsing(t, okBodyWithCustomMetaTag, "example.com/foo/bar", `
+example.com/foo/bar  namespace    
+`)
+
 	okMissingScope := `
 <meta name="docker-registry-push" content="https://registry.example.com/v1/ version=1.0">
 <meta name="docker-registry-pull" content="http://mirror.example.com/v2/ version=2.0">

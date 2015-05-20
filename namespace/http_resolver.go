@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
-	"time"
 
 	"github.com/Sirupsen/logrus"
 	"golang.org/x/net/html"
@@ -46,8 +45,6 @@ type HTTPResolverConfig struct {
 	 * recursively. Others will be ignored. Namespace can be empty denoting namespace
 	 * entry without any arguments. */
 	NSResolveCallback NSResolveActionCallback
-	/* Time interval saying how long to keep entries in cache. */
-	ExpireAfter time.Duration
 }
 
 type htmlMetaTagEnum int
@@ -74,15 +71,6 @@ const (
 var (
 	reWhitespace = regexp.MustCompile(`\s+`)
 )
-
-type cacheEntry struct {
-	created time.Time
-	entries *Entries
-}
-
-func newCacheEntry(entries *Entries) cacheEntry {
-	return cacheEntry{time.Now(), entries}
-}
 
 func (m htmlMetaTagEnum) String() string {
 	switch m {
@@ -271,7 +259,6 @@ ParsingLoop:
 
 type httpResolver struct {
 	config *HTTPResolverConfig
-	cache  map[string]cacheEntry
 }
 
 /* Create base HTTP resolver.
@@ -279,8 +266,6 @@ type httpResolver struct {
  * It uses discovery process to fetch scope entries. Multiple discovery
  * endpoints may be queried during single `Resolve()` call depending on scope's
  * namespace extensions and given callback.
- *
- * It caches fetched entries for further lookups.
  */
 func NewHTTPResolver(config *HTTPResolverConfig) Resolver {
 	if config == nil {
@@ -305,7 +290,6 @@ func NewHTTPResolver(config *HTTPResolverConfig) Resolver {
 	}
 	return &httpResolver{
 		config: config,
-		cache:  make(map[string]cacheEntry),
 	}
 }
 
@@ -314,22 +298,6 @@ func (hr *httpResolver) nameToURL(name string) string {
 }
 
 func (hr *httpResolver) resolveEntries(es *Entries, visited map[string]struct{}, name string) error {
-	cached, exists := hr.cache[name]
-	if exists && !cached.created.Add(hr.config.ExpireAfter).Before(time.Now()) {
-		entries, err := hr.config.ResolverFactory(cached.entries).Resolve(name)
-		if err != nil {
-			return err
-		}
-		entries, err = es.Join(entries)
-		if err != nil {
-			return err
-		}
-		*es = *entries
-		return nil
-	}
-	if exists {
-		delete(hr.cache, name)
-	}
 	resp, err := hr.config.Client.Get(hr.nameToURL(name))
 	if err != nil {
 		return err
@@ -390,22 +358,15 @@ func (hr *httpResolver) resolveEntries(es *Entries, visited map[string]struct{},
 		entries.Remove(*entryPtr)
 	}
 
-	recursingSuccessful := true
 	visited[name] = struct{}{}
 	for _, ext := range extensions {
 		if err = hr.resolveEntries(entries, visited, ext); err != nil {
 			if hr.config.IgnoreNSDiscoveryErrors {
-				recursingSuccessful = false
 				logrus.Warnf("Ignoring discovery error for extension namespace %q: %v", ext, err)
 			} else {
 				return err
 			}
 		}
-	}
-	if recursingSuccessful {
-		/* Don't cache entries if there was any error during recursive discovery.
-		 * FIXME: this check doesn't recognize errors happening below recursion level 1 */
-		hr.cache[name] = newCacheEntry(entries)
 	}
 	if entries, err = es.Join(entries); err != nil {
 		return err

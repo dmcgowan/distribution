@@ -3,7 +3,6 @@ package namespace
 import (
 	"strings"
 	"testing"
-	"time"
 )
 
 func assertHTMLParsing(t *testing.T, body, name, matchString string) {
@@ -152,7 +151,6 @@ func TestHTTPResolverIgnoringExtensions(t *testing.T) {
 	config := HTTPResolverConfig{
 		Client:            newMockHTTPClient(),
 		NSResolveCallback: func(string, scope) NSResolveActionEnum { return NSResolveActionIgnore },
-		ExpireAfter:       time.Minute,
 	}
 	r := NewHTTPResolver(&config)
 
@@ -174,13 +172,6 @@ example.com/project/main pull https://mirror.project.com/v2/ version=2.0.1
 example.com/project/main push https://registry-1.project.com/v2/ version=2.0.1
 `, true)
 
-	// hit cache
-	assertHTTPResolve(t, r, "example.com/library/bar", `
-example.com			index	https://search.example.com/
-example.com			pull	https://registry.example.com/v1/ version=1.0 trim
-example.com			push	https://registry.example.com/v1/ version=1.0 trim
-`, false)
-
 	name := "example.com/foo/not/existent"
 	entries, err := r.Resolve(name)
 	if err == nil {
@@ -192,8 +183,7 @@ example.com			push	https://registry.example.com/v1/ version=1.0 trim
 
 func TestHTTPRecursiveResolver(t *testing.T) {
 	config := HTTPResolverConfig{
-		Client:      newMockHTTPClient(),
-		ExpireAfter: time.Minute,
+		Client: newMockHTTPClient(),
 	}
 	r := NewHTTPResolver(&config)
 
@@ -213,13 +203,6 @@ example.com			pull	  https://registry.example.com/v1/ version=1.0 trim
 example.com			push	  https://registry.example.com/v1/ version=1.0 trim
 `, true)
 
-	// This time hit the cache
-	assertHTTPResolve(t, r, "example.com/library/bar", `
-example.com			index	https://search.example.com/
-example.com			pull	https://registry.example.com/v1/ version=1.0 trim
-example.com			push	https://registry.example.com/v1/ version=1.0 trim
-`, false)
-
 	assertHTTPResolve(t, r, "other.com/big/foo/app", `
 other.com/big/foo/app	index		https://index.big.com/v1/
 other.com/big/foo/app	pull		https://registry.other.com/v2/ version=2.0
@@ -229,12 +212,6 @@ other.com				index		https://other.com/v1/
 other.com				pull		https://mirror.other.com/v2/   version=2.0
 other.com				push		https://registry.other.com/v1/ version=1.0
 `, true)
-
-	assertHTTPResolve(t, r, "other.com", `
-other.com			index	https://other.com/v1/
-other.com           pull	https://mirror.other.com/v2/	version=2.0
-other.com           push	https://registry.other.com/v1/  version=1.0
-`, false)
 
 	assertHTTPResolve(t, r, "other.com/big/foo", `
 other.com/big/foo	namespace	other.com/big
@@ -254,7 +231,7 @@ other.com/big/foo/app       namespace   example.com/project other.com
 example.com/project			index		https://search.company.ltd/
 example.com/project			pull		https://registry.company.ltd/v2/ version=2.0 trim
 example.com/project			push		https://registry.company.ltd/v2/ version=2.0 trim
-example.com/project         namespace               
+example.com/project         namespace
 other.com					index		https://other.com/v1/
 other.com					pull		https://mirror.other.com/v2/   version=2.0
 other.com					push		https://registry.other.com/v1/ version=1.0
@@ -273,7 +250,6 @@ func TestHTTPResolverPassingExtensions(t *testing.T) {
 	config := HTTPResolverConfig{
 		Client:            newMockHTTPClient(),
 		NSResolveCallback: func(string, scope) NSResolveActionEnum { return NSResolveActionPass },
-		ExpireAfter:       time.Minute,
 	}
 	r := NewHTTPResolver(&config)
 	assertHTTPResolve(t, r, "example.com/foo/app", `
@@ -308,7 +284,6 @@ func TestHTTPResolverIgnoreNSDiscoveryErrors(t *testing.T) {
 		Client:                  newMockHTTPClient(),
 		IgnoreNSDiscoveryErrors: false,
 		NSResolveCallback:       func(string, scope) NSResolveActionEnum { return NSResolveActionRecurse },
-		ExpireAfter:             time.Minute,
 	}
 	r := NewHTTPResolver(&config)
 
@@ -324,17 +299,6 @@ func TestHTTPResolverIgnoreNSDiscoveryErrors(t *testing.T) {
 	// resolution should succeed because the error is ignored
 	config.IgnoreNSDiscoveryErrors = true
 	r = NewHTTPResolver(&config)
-	assertHTTPResolve(t, r, name, `
-other.com/bad	index		https://index.bad.com/v1/
-other.com/bad	pull		https://registry.bad.com/v2/ version=2.0.1
-other.com/bad	push		https://registry.bad.com/v2/ version=2.0.1
-other.com/bad	namespace	other.com/not/found not.reachable.server example.com
-example.com		index		https://search.example.com/
-example.com		pull		https://registry.example.com/v1/ version=1.0 trim
-example.com		push		https://registry.example.com/v1/ version=1.0 trim
-`, true)
-
-	// try again ensuring we don't hit cache
 	assertHTTPResolve(t, r, name, `
 other.com/bad	index		https://index.bad.com/v1/
 other.com/bad	pull		https://registry.bad.com/v2/ version=2.0.1

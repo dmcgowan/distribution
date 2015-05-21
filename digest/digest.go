@@ -20,8 +20,11 @@ const (
 	// DigestSha256EmptyTar is the canonical sha256 digest of empty data
 	DigestSha256EmptyTar = "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 
+	// CanonicalAlgorithm is the canonical algorithm for digester
 	CanonicalAlgorithm = "sha256"
-	CanonicalHash      = crypto.SHA256 // main digest algorithm used through distribution
+
+	// CanonicalHash is the canonical hash for digester
+	CanonicalHash = crypto.SHA256 // main digest algorithm used through distribution
 )
 
 // Digest allows simple protection of hex formatted digest strings, prefixed

@@ -14,14 +14,23 @@ nginx:
     - "5446:5446"
     - "5447:5447"
     - "5448:5448"
+    - "6666:6666"
   links:
     - registryv1:registryv1
     - registryv2:registryv2
+    - malevolent:malevolent
 registryv1:
   image: registry:0.9.1
   ports:
     - "5000"
 registryv2:
   build: "../../"
+  ports:
+    - "5000"
+malevolent:
+  build: "malevolent"
+  command: "-l 0.0.0.0:5000 -u http://registryv2:5000"
+  links:
+    - registryv2:registryv2
   ports:
     - "5000"

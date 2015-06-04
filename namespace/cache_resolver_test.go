@@ -5,6 +5,49 @@ import (
 	"time"
 )
 
+func TestEntriesCacheAddExistingEntry(t *testing.T) {
+	ec := newEntriesCache(time.Millisecond*2, 2)
+	fstEntries := NewEntries()
+	sndEntries := NewEntries()
+	trdEntries := NewEntries()
+	ec.store("example.com/foo/bar", fstEntries)
+	time.Sleep(time.Microsecond * 500)
+	ec.store("example.com/foo/app", sndEntries)
+	time.Sleep(time.Microsecond * 500)
+	ec.store("example.com/foo/bar", trdEntries)
+
+	if ec.lookup("example.com/foo/app") != sndEntries {
+		t.Errorf("Expected 2nd entries to be present.")
+	}
+	if ec.lookup("example.com/foo/bar") != trdEntries {
+		t.Errorf("Expected 3rd entries to be present.")
+	}
+
+	time.Sleep(time.Microsecond * 1050)
+	if ec.lookup("example.com/foo/app") != sndEntries {
+		t.Errorf("Expected 2nd entries to be present.")
+	}
+	if ec.lookup("example.com/foo/bar") != trdEntries {
+		t.Errorf("Expected 3rd entries to be present.")
+	}
+
+	time.Sleep(time.Microsecond * 500)
+	if ec.lookup("example.com/foo/app") != nil {
+		t.Errorf("Expected 2nd entries to be evicted.")
+	}
+	if ec.lookup("example.com/foo/bar") != trdEntries {
+		t.Errorf("Expected 3rd entries to be present.")
+	}
+
+	time.Sleep(time.Microsecond * 500)
+	if ec.lookup("example.com/foo/app") != nil {
+		t.Errorf("Expected 2nd entries to be evicted.")
+	}
+	if ec.lookup("example.com/foo/bar") != nil {
+		t.Errorf("Expected 3rd entries to be evicted.")
+	}
+}
+
 func TestCacheResolverDefaultSettings(t *testing.T) {
 	hr := NewHTTPResolver(&HTTPResolverConfig{Client: newMockHTTPClient()})
 	cr := NewCacheResolver(hr, nil)

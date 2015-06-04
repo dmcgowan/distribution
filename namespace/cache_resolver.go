@@ -43,7 +43,7 @@ func newEntriesCache(expireAfter time.Duration, maxEntries int) *entriesCache {
 
 // Must only be called from lookup method.
 func (sc *entriesCache) garbageCollectExpired() {
-	if sc.expirationQueue == nil {
+	if sc.expirationQueue == nil || sc.expireAfter == 0 {
 		return
 	}
 	now := time.Now()
@@ -59,14 +59,10 @@ func (sc *entriesCache) garbageCollectExpired() {
 func (sc *entriesCache) lookup(name string) *Entries {
 	sc.mutex.Lock()
 	defer sc.mutex.Unlock()
+	sc.garbageCollectExpired()
 	entry, exists := sc.cache[name]
 	if exists {
-		if sc.expireAfter == 0 || !entry.created.Add(sc.expireAfter).Before(time.Now()) {
-			return entry.entries
-		}
-		sc.garbageCollectExpired()
-	}
-	if !exists {
+		return entry.entries
 	}
 	return nil
 }
@@ -74,6 +70,18 @@ func (sc *entriesCache) lookup(name string) *Entries {
 func (sc *entriesCache) store(name string, entries *Entries) {
 	sc.mutex.Lock()
 	defer sc.mutex.Unlock()
+	sc.garbageCollectExpired()
+	// this shouldn't occur when used from cacheResolver
+	if entry, exists := sc.cache[name]; exists {
+		delete(sc.cache, name)
+		elem := sc.expirationQueue.Front()
+		for elem != nil && (elem.Value.(*cacheEntry).created.Before(entry.created) || elem.Value.(*cacheEntry).name != entry.name) {
+			elem = elem.Next()
+		}
+		if elem != nil {
+			sc.expirationQueue.Remove(elem)
+		}
+	}
 	if sc.maxEntries > 0 && len(sc.cache) >= sc.maxEntries {
 		elem := sc.expirationQueue.Front()
 		delete(sc.cache, elem.Value.(*cacheEntry).name)

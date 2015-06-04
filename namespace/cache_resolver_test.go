@@ -6,44 +6,44 @@ import (
 )
 
 func TestEntriesCacheAddExistingEntry(t *testing.T) {
-	ec := newEntriesCache(time.Millisecond*2, 2)
+	ec := NewExpiringEntriesCache(time.Millisecond*2, 2)
 	fstEntries := NewEntries()
 	sndEntries := NewEntries()
 	trdEntries := NewEntries()
-	ec.store("example.com/foo/bar", fstEntries)
+	ec.Store("example.com/foo/bar", fstEntries)
 	time.Sleep(time.Microsecond * 500)
-	ec.store("example.com/foo/app", sndEntries)
+	ec.Store("example.com/foo/app", sndEntries)
 	time.Sleep(time.Microsecond * 500)
-	ec.store("example.com/foo/bar", trdEntries)
+	ec.Store("example.com/foo/bar", trdEntries)
 
-	if ec.lookup("example.com/foo/app") != sndEntries {
+	if ec.Lookup("example.com/foo/app") != sndEntries {
 		t.Errorf("Expected 2nd entries to be present.")
 	}
-	if ec.lookup("example.com/foo/bar") != trdEntries {
+	if ec.Lookup("example.com/foo/bar") != trdEntries {
 		t.Errorf("Expected 3rd entries to be present.")
 	}
 
 	time.Sleep(time.Microsecond * 1050)
-	if ec.lookup("example.com/foo/app") != sndEntries {
+	if ec.Lookup("example.com/foo/app") != sndEntries {
 		t.Errorf("Expected 2nd entries to be present.")
 	}
-	if ec.lookup("example.com/foo/bar") != trdEntries {
+	if ec.Lookup("example.com/foo/bar") != trdEntries {
 		t.Errorf("Expected 3rd entries to be present.")
 	}
 
 	time.Sleep(time.Microsecond * 500)
-	if ec.lookup("example.com/foo/app") != nil {
+	if ec.Lookup("example.com/foo/app") != nil {
 		t.Errorf("Expected 2nd entries to be evicted.")
 	}
-	if ec.lookup("example.com/foo/bar") != trdEntries {
+	if ec.Lookup("example.com/foo/bar") != trdEntries {
 		t.Errorf("Expected 3rd entries to be present.")
 	}
 
 	time.Sleep(time.Microsecond * 500)
-	if ec.lookup("example.com/foo/app") != nil {
+	if ec.Lookup("example.com/foo/app") != nil {
 		t.Errorf("Expected 2nd entries to be evicted.")
 	}
-	if ec.lookup("example.com/foo/bar") != nil {
+	if ec.Lookup("example.com/foo/bar") != nil {
 		t.Errorf("Expected 3rd entries to be evicted.")
 	}
 }
@@ -82,7 +82,7 @@ example.com/foo     namespace	example.com
 
 func TestCacheResolverReachMaxCapacity(t *testing.T) {
 	hr := NewHTTPResolver(&HTTPResolverConfig{Client: newMockHTTPClient()})
-	cr := NewCacheResolver(hr, &CacheResolverConfig{MaxEntries: 2})
+	cr := NewCacheResolver(hr, NewExpiringEntriesCache(DefaultExpireAfter, 2))
 
 	assertHTTPResolve(t, cr, "example.com/project/main", `
 example.com/project/main index https://search.project.com/
@@ -147,7 +147,7 @@ example.com			push	https://registry.example.com/v1/ version=1.0 trim
 
 func TestCacheResolverCollectsExpired(t *testing.T) {
 	hr := NewHTTPResolver(&HTTPResolverConfig{Client: newMockHTTPClient()})
-	cr := NewCacheResolver(hr, &CacheResolverConfig{ExpireAfter: time.Millisecond})
+	cr := NewCacheResolver(hr, NewExpiringEntriesCache(time.Millisecond, DefaultCacheSize))
 
 	assertHTTPResolve(t, cr, "example.com/project/main", `
 example.com/project/main index https://search.project.com/

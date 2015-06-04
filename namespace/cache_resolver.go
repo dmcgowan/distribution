@@ -6,7 +6,14 @@ import (
 	"time"
 )
 
-const DefaultMaxCachedEntries = 512
+const DefaultExpireAfter = time.Hour * 24
+const DefaultCacheSize = 512
+
+/* Cache interface for cacheResolver. */
+type EntriesCache interface {
+	Lookup(name string) *Entries
+	Store(name string, entries *Entries)
+}
 
 type cacheEntry struct {
 	name    string
@@ -18,31 +25,38 @@ func newCacheEntry(name string, entries *Entries) cacheEntry {
 	return cacheEntry{name, time.Now(), entries}
 }
 
-type entriesCache struct {
+/* Thread-safe implementation of EntriesCache. It removes oldest entries when
+ * they expire or a cache size is reached. Removal is done during both
+ * `Lookup()` and `Store()` methods. */
+type ExpiringEntriesCache struct {
 	mutex       sync.Mutex
 	cache       map[string]cacheEntry
 	expireAfter time.Duration
-	maxEntries  int
+	size        int
 	/* Contains pointers to cache entries sorted by the time of their addition.
 	 * Entry added last will be at the end. */
 	expirationQueue *list.List
 }
 
-func newEntriesCache(expireAfter time.Duration, maxEntries int) *entriesCache {
+/* expireAfter is a time interval saying how long to keep entries in cache.
+ * 0 means undefinitely.
+ * If size is reached, the oldest entry will be removed before inserting
+ * a new one. */
+func NewExpiringEntriesCache(expireAfter time.Duration, size int) *ExpiringEntriesCache {
 	var expirationQueue *list.List
-	if maxEntries > 0 {
+	if size > 0 {
 		expirationQueue = list.New()
 	}
-	return &entriesCache{
+	return &ExpiringEntriesCache{
 		cache:           make(map[string]cacheEntry),
 		expireAfter:     expireAfter,
-		maxEntries:      maxEntries,
+		size:            size,
 		expirationQueue: expirationQueue,
 	}
 }
 
-// Must only be called from lookup method.
-func (sc *entriesCache) garbageCollectExpired() {
+// Must only be called from inside of Lookup/Store methods.
+func (sc *ExpiringEntriesCache) garbageCollectExpired() {
 	if sc.expirationQueue == nil || sc.expireAfter == 0 {
 		return
 	}
@@ -56,7 +70,7 @@ func (sc *entriesCache) garbageCollectExpired() {
 	}
 }
 
-func (sc *entriesCache) lookup(name string) *Entries {
+func (sc *ExpiringEntriesCache) Lookup(name string) *Entries {
 	sc.mutex.Lock()
 	defer sc.mutex.Unlock()
 	sc.garbageCollectExpired()
@@ -67,7 +81,7 @@ func (sc *entriesCache) lookup(name string) *Entries {
 	return nil
 }
 
-func (sc *entriesCache) store(name string, entries *Entries) {
+func (sc *ExpiringEntriesCache) Store(name string, entries *Entries) {
 	sc.mutex.Lock()
 	defer sc.mutex.Unlock()
 	sc.garbageCollectExpired()
@@ -82,7 +96,7 @@ func (sc *entriesCache) store(name string, entries *Entries) {
 			sc.expirationQueue.Remove(elem)
 		}
 	}
-	if sc.maxEntries > 0 && len(sc.cache) >= sc.maxEntries {
+	if sc.size > 0 && len(sc.cache) >= sc.size {
 		elem := sc.expirationQueue.Front()
 		delete(sc.cache, elem.Value.(*cacheEntry).name)
 		sc.expirationQueue.Remove(elem)
@@ -92,33 +106,26 @@ func (sc *entriesCache) store(name string, entries *Entries) {
 	sc.expirationQueue.PushBack(&entry)
 }
 
-type CacheResolverConfig struct {
-	/* Time interval saying how long to keep entries in cache.
-	 * 0 says undefinitely. */
-	ExpireAfter time.Duration
-	/* How many entries can be kept at most. If reached during inserting
-	 * new one, the oldest entry will be removed. If 0, it will be set to
-	 * DefaultMaxCachedEntries. If -1 no limit will be applied. */
-	MaxEntries int
-}
-
+/* Generic caching resolver that stores results of prior resolutions and
+ * returns them on subsequent calls. */
 type cacheResolver struct {
 	baseResolver Resolver
-	cache        *entriesCache
+	cache        EntriesCache
 }
 
-func NewCacheResolver(baseResolver Resolver, config *CacheResolverConfig) Resolver {
-	if config == nil {
-		config = &CacheResolverConfig{ExpireAfter: time.Hour * 24}
+/* Make a new cache provider with particular cache implementation.
+ * If cache is nil, new ExpiringEntriesCache will be instantiated with
+ * default parameters.
+ */
+func NewCacheResolver(baseResolver Resolver, cache EntriesCache) Resolver {
+	if cache == nil {
+		cache = NewExpiringEntriesCache(DefaultExpireAfter, DefaultCacheSize)
 	}
-	if config.MaxEntries == 0 {
-		config.MaxEntries = DefaultMaxCachedEntries
-	}
-	return &cacheResolver{baseResolver, newEntriesCache(config.ExpireAfter, config.MaxEntries)}
+	return &cacheResolver{baseResolver, cache}
 }
 
 func (cr *cacheResolver) Resolve(name string) (*Entries, error) {
-	entries := cr.cache.lookup(name)
+	entries := cr.cache.Lookup(name)
 	if entries != nil {
 		return entries, nil
 	}
@@ -126,6 +133,6 @@ func (cr *cacheResolver) Resolve(name string) (*Entries, error) {
 	if err != nil {
 		return nil, err
 	}
-	cr.cache.store(name, entries)
+	cr.cache.Store(name, entries)
 	return entries, nil
 }

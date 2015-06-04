@@ -195,16 +195,9 @@ func getScopeAttrs(host, path string) []testScopeAttr {
 	return nil
 }
 
-// TODO: are these something that would docker-distribution endpoint return
 func writeHeaders(w http.ResponseWriter, contentType string) {
 	h := w.Header()
-	h.Add("Server", "docker-tests/mock")
-	h.Add("Expires", "-1")
 	h.Add("Content-Type", contentType)
-	h.Add("Pragma", "no-cache")
-	h.Add("Cache-Control", "no-cache")
-	h.Add("X-Docker-Registry-Version", "0.0.0")
-	h.Add("X-Docker-Registry-Config", "mock")
 }
 
 func writeResponse(w http.ResponseWriter, message interface{}, code int) {

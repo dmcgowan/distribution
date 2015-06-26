@@ -94,3 +94,16 @@ function login() {
 	[ "$status" -ne 0 ]
 }
 
+
+@test "Test V1 fallback" {
+	docker tag -f $image $hostname:5101/$image
+	run docker push $hostname:5101/$image
+	[ "$status" -eq 0 ]
+}
+
+@test "Test V1 fallback with authentication" {
+	login $hostname:5102
+	docker tag -f $image $hostname:5102/$image
+	run docker push $hostname:5102/$image
+}
+

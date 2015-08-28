@@ -57,7 +57,7 @@ func parseRepositoryName(s string) (repo, tail string) {
 	if i == nil {
 		return
 	}
-	return s[:i[1]], s[i[1]:]
+	return s[1:i[1]], s[i[1]:]
 }
 
 func parseTag(s string) (tag Tag, tail string) {
@@ -123,6 +123,9 @@ func (r DigestReference) Repository() Repository { return r.repository }
 
 // String returns the full string reference.
 func (r DigestReference) String() string {
+	if len(r.tag) > 0 {
+		return r.repository.String() + ":" + string(r.tag) + "@" + string(r.digest)
+	}
 	return r.repository.String() + "@" + string(r.digest)
 }
 

@@ -100,7 +100,7 @@ func (r Repository) Validate() error {
 	}
 
 	components := r.Name
-	for {
+	for components != "" {
 		var component string
 		sep := strings.Index(components, "/")
 		if sep >= 0 {
@@ -113,10 +113,9 @@ func (r Repository) Validate() error {
 		if !RepositoryNameComponentAnchoredRegexp.MatchString(component) {
 			return ErrRepositoryNameComponentInvalid
 		}
-		if sep < 0 {
-			return nil
-		}
 	}
+
+	return nil
 }
 
 // NewRepository returns a valid Repository from an input string representing

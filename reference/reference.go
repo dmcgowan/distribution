@@ -102,10 +102,10 @@ func Parse(s string) (Reference, error) {
 	}
 
 	if dgst != "" {
-		return DigestReference{repository: repository, digest: dgst, tag: tag}, nil
+		return DigestReference{repository: repository, Digest: dgst, Tag: tag}, nil
 	}
 	if tag != "" {
-		return TagReference{repository: repository, tag: tag}, nil
+		return TagReference{repository: repository, Tag: tag}, nil
 	}
 	return nil, ErrReferenceInvalidFormat
 }
@@ -114,8 +114,8 @@ func Parse(s string) (Reference, error) {
 // Implements the Reference interface.
 type DigestReference struct {
 	repository Repository
-	digest     digest.Digest
-	tag        Tag
+	Digest     digest.Digest
+	Tag        Tag
 }
 
 // Repository returns the repository part.
@@ -123,10 +123,10 @@ func (r DigestReference) Repository() Repository { return r.repository }
 
 // String returns the full string reference.
 func (r DigestReference) String() string {
-	if len(r.tag) > 0 {
-		return r.repository.String() + ":" + string(r.tag) + "@" + string(r.digest)
+	if len(r.Tag) > 0 {
+		return r.repository.String() + ":" + string(r.Tag) + "@" + string(r.Digest)
 	}
-	return r.repository.String() + "@" + string(r.digest)
+	return r.repository.String() + "@" + string(r.Digest)
 }
 
 // NewDigestReference returns an initialized DigestReference.
@@ -142,13 +142,13 @@ func NewDigestReference(canonicalRepository string, digest digest.Digest, option
 	if err := digest.Validate(); err != nil {
 		return ref, err
 	}
-	ref.digest = digest
+	ref.Digest = digest
 
 	if len(optionalTag) > 0 {
 		if err := optionalTag.Validate(); err != nil {
 			return ref, err
 		}
-		ref.tag = optionalTag
+		ref.Tag = optionalTag
 	}
 
 	return ref, err
@@ -158,7 +158,7 @@ func NewDigestReference(canonicalRepository string, digest digest.Digest, option
 // Implements the Reference interface.
 type TagReference struct {
 	repository Repository
-	tag        Tag
+	Tag        Tag
 }
 
 // Repository returns the repository part.
@@ -166,7 +166,7 @@ func (r TagReference) Repository() Repository { return r.repository }
 
 // String returns the full string reference.
 func (r TagReference) String() string {
-	return r.repository.String() + ":" + string(r.tag)
+	return r.repository.String() + ":" + string(r.Tag)
 }
 
 // NewTagReference returns an initialized TagReference.
@@ -183,7 +183,7 @@ func NewTagReference(canonicalRepository string, tagName string) (TagReference, 
 	if err != nil {
 		return ref, err
 	}
-	ref.tag = tag
+	ref.Tag = tag
 
 	return ref, err
 }

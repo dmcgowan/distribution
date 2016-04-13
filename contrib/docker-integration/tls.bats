@@ -107,3 +107,11 @@ function setup() {
 	[ "$status" -ne 0 ]
 }
 
+@test "Test TLS client auth with intermediate certificate" {
+	docker_t tag -f $image $hostname:5450/$image
+	run docker_t push $hostname:5450/$image
+	echo $output
+	[ "$status" -eq 0 ]
+}
+
+
